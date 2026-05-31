@@ -28,3 +28,16 @@ class DhanConnector:
         }
 
         return self.dhan.quote_data(securities)
+    def get_last_price(self, exchange, security_id):
+
+        response = self.get_quote(exchange, security_id)
+
+        quote = response["data"]["data"][exchange][str(security_id)]
+
+        return {
+            "exchange": exchange,
+            "security_id": security_id,
+            "last_price": quote["last_price"],
+            "volume": quote["volume"],
+            "timestamp": quote["last_trade_time"]
+        }
