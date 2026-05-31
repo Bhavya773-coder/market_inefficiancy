@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+
+venv/
+
+.env
+
+*.jsonl
+
+logs/
+storage/
+
+*.bak
+*.bak2
+
+.DS_Store
