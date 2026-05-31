@@ -14,3 +14,5 @@ storage/
 *.bak2
 
 .DS_Store
+# Dhan security master
+security_id_list.csv
