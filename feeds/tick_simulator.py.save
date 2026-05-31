@@ -1,0 +1,49 @@
+import time
+import random
+import json
+
+symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
+
+print("=== STRUCTURED FEED ENGINE v1 STARTED ===")
+
+while True:
+    event = {
+        "symbol": random.choice(symbols),
+        "price": round(random.uniform(1000, 3000), 2),
+        "timestamp": time.time()
+    }
+
+    print(json.dumps(event))
+
+    time.sleep(import time
+import random
+import json
+
+symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
+
+print("=== STRUCTURED FEED ENGINE v1 STARTED ===")
+
+while True:
+    event = {
+        "symbol": random.choice(symbols),
+        "price": round(random.uniform(1000, 3000), 2),
+        "timestamp": time.time()
+    }
+
+    print(json.dumps(event))
+
+    time.sleep(1)import time
+import random
+
+symbols = ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
+
+print("=== TICK SIMULATOR STARTED ===")
+
+while True:
+    symbol = random.choice(symbols)
+    price = round(random.uniform(1000, 3000), 2)
+    timestamp = time.time()
+
+    print(f"{symbol} | {price} | {timestamp}")
+
+    time.sleep(1)

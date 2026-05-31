@@ -1,0 +1,133 @@
+import redis
+import json
+
+
+class LearningMemory:
+
+    DECAY = 0.995
+
+    def __init__(self):
+        self.r = redis.Redis(
+            host="localhost",
+            port=6379,
+            decode_responses=True
+        )
+
+    def _key(self, symbol, strategy=None, regime=None):
+
+        parts = ["memory", symbol]
+
+        if strategy:
+            parts.append(strategy)
+
+        if regime:
+            parts.append(regime)
+
+        return ":".join(parts)
+
+    def record_trade(
+        self,
+        symbol,
+        pnl,
+        strategy=None,
+        regime=None
+    ):
+
+        key = self._key(
+            symbol,
+            strategy,
+            regime
+        )
+
+        existing = self.r.get(key)
+
+        if existing:
+            data = json.loads(existing)
+        else:
+            data = {
+                "wins": 0,
+                "losses": 0,
+                "total_pnl": 0.0,
+                "confidence": 0.0
+            }
+
+        data.setdefault("wins", 0)
+        data.setdefault("losses", 0)
+        data.setdefault("total_pnl", 0.0)
+        data.setdefault("confidence", 0.0)
+
+        data["confidence"] *= self.DECAY
+
+        if pnl > 0:
+
+            data["wins"] += 1
+            data["confidence"] += 1
+
+        else:
+
+            data["losses"] += 1
+            data["confidence"] -= 2
+
+        data["total_pnl"] += pnl
+
+        self.r.set(
+            key,
+            json.dumps(data)
+        )
+
+    def get_bias(
+        self,
+        symbol,
+        strategy=None,
+        regime=None
+    ):
+
+        key = self._key(
+            symbol,
+            strategy,
+            regime
+        )
+
+        existing = self.r.get(key)
+
+        if not existing:
+            return 0.0
+
+        data = json.loads(existing)
+
+        wins = data.get("wins", 0)
+        losses = data.get("losses", 0)
+
+        total_pnl = data.get(
+            "total_pnl",
+            0.0
+        )
+
+        confidence = data.get(
+            "confidence",
+            0.0
+        )
+
+        trades = wins + losses
+
+        if trades == 0:
+            return 0.0
+
+        confidence_bias = confidence / trades
+
+        pnl_bias = (
+            total_pnl / trades
+        )
+
+        combined = (
+            confidence_bias * 0.7
+            + pnl_bias * 0.3
+        )
+
+        return max(
+            -1.0,
+            min(
+                1.0,
+                combined
+            )
+        )

@@ -1,0 +1,27 @@
+import redis
+import json
+
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+
+print("=== STRATEGY BLOCKLIST REPORT ===")
+
+for key in sorted(r.keys("memory:*:*")):
+    data = json.loads(r.get(key))
+    _, symbol, strategy = key.split(":")
+
+    wins = data["wins"]
+    losses = data["losses"]
+    pnl = data["total_pnl"]
+    trades = wins + losses
+
+    if trades == 0:
+        continue
+
+    avg_pnl = pnl / trades
+
+    if avg_pnl < -0.05:
+        print("")
+        print(f"BLOCK CANDIDATE: {symbol} | {strategy}")
+        print("Trades:", trades)
+        print("Avg PnL:", round(avg_pnl, 4))
+        print("Total PnL:", round(pnl, 4))
