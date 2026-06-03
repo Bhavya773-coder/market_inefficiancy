@@ -28,3 +28,24 @@ class MarketEvent:
             "timestamp": self.timestamp,
             "metadata": self.metadata
         }
+
+    @classmethod
+    def from_quote(cls, quote):
+        symbol = quote["symbol"]
+        source = "market_quote"
+        event_type = "live_quote"
+        price = quote["last_price"]
+        volume = quote.get("volume", 0)
+        timestamp = quote.get("last_trade_time") or quote.get("timestamp")
+        metadata = quote
+
+        return cls(
+            symbol=symbol,
+            source=source,
+            event_type=event_type,
+            price=price,
+            volume=volume,
+            timestamp=timestamp,
+            metadata=metadata
+        )
+
