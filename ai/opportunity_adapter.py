@@ -38,3 +38,15 @@ class OpportunityAdapter:
             confidence=confidence,
             metadata=metadata
         )
+
+    def from_market_quote(self, asset, quote):
+
+        return Opportunity(
+            asset=asset,
+            source="market_quote",
+            opportunity_type="live_market_quote",
+            score=0.0,
+            confidence=1.0,
+            metadata=quote
+        )
+
