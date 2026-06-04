@@ -50,3 +50,21 @@ class OpportunityAdapter:
             metadata=quote
         )
 
+    def from_lag_result(self, lag_result):
+        asset = lag_result["target_symbol"]
+        source = "lag_detector"
+        opportunity_type = "reaction_lag"
+        score = lag_result["reaction_gap"]
+        confidence = 1.0 if lag_result["is_lagging"] else 0.0
+        metadata = lag_result
+
+        return Opportunity(
+            asset=asset,
+            source=source,
+            opportunity_type=opportunity_type,
+            score=score,
+            confidence=confidence,
+            metadata=metadata
+        )
+
+
