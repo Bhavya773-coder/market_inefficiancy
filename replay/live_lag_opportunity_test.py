@@ -1,0 +1,95 @@
+import sys
+import time
+from connectors.dhan_connector import DhanConnector
+from ai.market_event import MarketEvent
+from ai.price_change_detector import PriceChangeDetector
+from ai.reaction_event import ReactionEvent
+from ai.lag_detector import LagDetector
+from ai.opportunity_adapter import OpportunityAdapter
+
+def get_quote_with_retry(connector, exchange, security_id, symbol, retries=5, delay=3):
+    for i in range(retries):
+        try:
+            quote = connector.get_last_price(exchange, security_id)
+            quote["symbol"] = symbol
+            return quote
+        except Exception as e:
+            if i == retries - 1:
+                raise e
+            print(f"Error fetching quote for {symbol} (attempt {i+1}/{retries}): {e}. Retrying in {delay}s...")
+            time.sleep(delay)
+
+def main():
+    print("Initializing DhanConnector...")
+    connector = DhanConnector()
+
+    print("\n--- Step 1 & 2: Fetch first quote for NIFTYBEES and HDFCNIFTY ---")
+    quote_ref_1 = get_quote_with_retry(connector, "NSE_EQ", 10576, "NIFTYBEES")
+    quote_tgt_1 = get_quote_with_retry(connector, "NSE_EQ", 11591, "HDFCNIFTY")
+
+    print(f"First NIFTYBEES quote: {quote_ref_1}")
+    print(f"First HDFCNIFTY quote: {quote_tgt_1}")
+
+    print("\n--- Step 3: Convert both into MarketEvent ---")
+    event_ref_1 = MarketEvent.from_quote(quote_ref_1)
+    event_tgt_1 = MarketEvent.from_quote(quote_tgt_1)
+
+    print("\n--- Step 4: Wait 5 seconds ---")
+    time.sleep(5)
+
+    print("\n--- Step 5 & 6: Fetch second quote for NIFTYBEES and HDFCNIFTY ---")
+    quote_ref_2 = get_quote_with_retry(connector, "NSE_EQ", 10576, "NIFTYBEES")
+    quote_tgt_2 = get_quote_with_retry(connector, "NSE_EQ", 11591, "HDFCNIFTY")
+
+    print(f"Second NIFTYBEES quote: {quote_ref_2}")
+    print(f"Second HDFCNIFTY quote: {quote_tgt_2}")
+
+    print("\n--- Step 7: Convert both into MarketEvent ---")
+    event_ref_2 = MarketEvent.from_quote(quote_ref_2)
+    event_tgt_2 = MarketEvent.from_quote(quote_tgt_2)
+
+    print("\n--- Step 8: Detect price changes using PriceChangeDetector ---")
+    change_detector = PriceChangeDetector()
+    ref_change = change_detector.detect(event_ref_2, event_ref_1)
+    tgt_change = change_detector.detect(event_tgt_2, event_tgt_1)
+
+    print(f"Reference Change: {ref_change}")
+    print(f"Target Change: {tgt_change}")
+
+    print("\n--- Step 9: Convert changes into ReactionEvent ---")
+    ref_reaction = ReactionEvent.from_price_change(ref_change) if ref_change else None
+    tgt_reaction = ReactionEvent.from_price_change(tgt_change) if tgt_change else None
+
+    print("\n--- Step 10: Detect lag using LagDetector ---")
+    lag_detector = LagDetector()
+    # We use a min_gap_percent of -100 to ensure we get a lag_result even if changes are 0
+    lag_result = lag_detector.detect(ref_reaction, tgt_reaction, min_gap_percent=-100)
+
+    print("\n--- Step 11: Convert lag_result into Opportunity using OpportunityAdapter ---")
+    opportunity_adapter = OpportunityAdapter()
+    opportunity = opportunity_adapter.from_lag_result(lag_result) if lag_result else None
+
+    print("\n--- Step 12: Print results ---")
+    print("Reference Reaction:")
+    if ref_reaction:
+        print(ref_reaction.to_dict())
+    else:
+        print(None)
+
+    print("\nTarget Reaction:")
+    if tgt_reaction:
+        print(tgt_reaction.to_dict())
+    else:
+        print(None)
+
+    print("\nLag Result:")
+    print(lag_result)
+
+    print("\nOpportunity.to_dict():")
+    if opportunity:
+        print(opportunity.to_dict())
+    else:
+        print(None)
+
+if __name__ == "__main__":
+    main()
