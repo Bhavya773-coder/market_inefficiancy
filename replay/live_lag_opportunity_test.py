@@ -62,8 +62,7 @@ def main():
 
     print("\n--- Step 10: Detect lag using LagDetector ---")
     lag_detector = LagDetector()
-    # We use a min_gap_percent of -100 to ensure we get a lag_result even if changes are 0
-    lag_result = lag_detector.detect(ref_reaction, tgt_reaction, min_gap_percent=-100)
+    lag_result = lag_detector.detect(ref_reaction, tgt_reaction, min_gap_percent=0.05)
 
     print("\n--- Step 11: Convert lag_result into Opportunity using OpportunityAdapter ---")
     opportunity_adapter = OpportunityAdapter()
@@ -89,7 +88,8 @@ def main():
     if opportunity:
         print(opportunity.to_dict())
     else:
-        print(None)
+        print("No valid lag opportunity detected.")
+
 
 if __name__ == "__main__":
     main()
