@@ -51,11 +51,17 @@ class OpportunityAdapter:
         )
 
     def from_lag_result(self, lag_result):
+        if lag_result is None:
+            return None
+
+        if lag_result.get("is_lagging") is False:
+            return None
+
         asset = lag_result["target_symbol"]
         source = "lag_detector"
         opportunity_type = "reaction_lag"
         score = lag_result["reaction_gap"]
-        confidence = 1.0 if lag_result["is_lagging"] else 0.0
+        confidence = 1.0
         metadata = lag_result
 
         return Opportunity(
@@ -66,5 +72,6 @@ class OpportunityAdapter:
             confidence=confidence,
             metadata=metadata
         )
+
 
 
