@@ -32,6 +32,19 @@ class DhanConnector:
 
         response = self.get_quote(exchange, security_id)
 
+        if (
+            not isinstance(response, dict)
+            or response.get("status") != "success"
+            or "data" not in response
+            or not isinstance(response["data"], dict)
+            or "data" not in response["data"]
+            or not isinstance(response["data"]["data"], dict)
+            or exchange not in response["data"]["data"]
+            or not isinstance(response["data"]["data"][exchange], dict)
+            or str(security_id) not in response["data"]["data"][exchange]
+        ):
+            raise ValueError(f"Invalid Dhan quote response: {response}")
+
         quote = response["data"]["data"][exchange][str(security_id)]
 
         return {
@@ -41,3 +54,4 @@ class DhanConnector:
             "volume": quote["volume"],
             "timestamp": quote["last_trade_time"]
         }
+
