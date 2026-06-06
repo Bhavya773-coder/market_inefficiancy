@@ -15,6 +15,7 @@ def get_quote_with_retry(connector, exchange, security_id, symbol, retries=5, de
         try:
             quote = connector.get_last_price(exchange, security_id)
             quote["symbol"] = symbol
+            quote["mock"] = False
             return quote
         except Exception as e:
             if i == retries - 1 or isinstance(e, ValueError):
@@ -32,7 +33,9 @@ def get_quote_with_retry(connector, exchange, security_id, symbol, retries=5, de
                     "last_price": price,
                     "volume": 1000,
                     "timestamp": now_str,
-                    "symbol": symbol
+                    "symbol": symbol,
+                    "mock": True,
+                    "data_source": "mock_fallback"
                 }
             print(f"Error fetching quote for {symbol} (attempt {i+1}/{retries}): {e}. Retrying in {delay}s...")
             time.sleep(delay)
@@ -94,6 +97,20 @@ def main():
     else:
         lag_detector = LagDetector()
         lag_result = lag_detector.detect(ref_reaction, tgt_reaction, min_gap_percent=0.05)
+
+        if lag_result is not None:
+            is_mock = (
+                quote_ref_1.get("mock") is True or
+                quote_ref_2.get("mock") is True or
+                quote_tgt_1.get("mock") is True or
+                quote_tgt_2.get("mock") is True
+            )
+            if is_mock:
+                lag_result["mock"] = True
+                lag_result["data_source"] = "mock_fallback"
+            else:
+                lag_result["mock"] = False
+                lag_result["data_source"] = "dhan_live"
 
         print("\n--- Step 11: Convert lag_result into Opportunity using OpportunityAdapter ---")
         opportunity_adapter = OpportunityAdapter()
