@@ -7,6 +7,7 @@ from ai.reaction_event import ReactionEvent
 from ai.lag_detector import LagDetector
 from ai.opportunity_adapter import OpportunityAdapter
 from ai.quote_freshness_validator import QuoteFreshnessValidator
+from ai.opportunity_validator import OpportunityValidator
 _call_counts = {}
 
 def get_quote_with_retry(connector, exchange, security_id, symbol, retries=5, delay=3):
@@ -97,6 +98,10 @@ def main():
         print("\n--- Step 11: Convert lag_result into Opportunity using OpportunityAdapter ---")
         opportunity_adapter = OpportunityAdapter()
         opportunity = opportunity_adapter.from_lag_result(lag_result) if lag_result else None
+
+        validation_result = OpportunityValidator().validate(opportunity)
+        print("\nOpportunity Validation:")
+        print(validation_result)
 
     print("\n--- Step 12: Print results ---")
     print("Reference Reaction:")
