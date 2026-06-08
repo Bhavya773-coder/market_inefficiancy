@@ -1,6 +1,9 @@
+# Paper-only simulator.
+# This module must never call real broker order APIs.
 from ai.paper_trading_account import PaperTradingAccount
 from ai.paper_position_exit_evaluator import PaperPositionExitEvaluator
 from ai.paper_exit_decision import PaperExitDecision
+
 
 
 class PaperTradeSimulator:
@@ -102,5 +105,54 @@ class PaperTradeSimulator:
         """
         evaluation = self.evaluate_position_exit(symbol, current_price, target_profit_pct, stop_loss_pct)
         return PaperExitDecision.from_evaluation(evaluation)
+
+    def close_position_from_decision(self, decision):
+        """
+        Closes a position automatically based on a PaperExitDecision.
+        """
+        if decision is None:
+            return {
+                "status": "rejected",
+                "reason": "decision_missing"
+            }
+
+        try:
+            decision_dict = decision.to_dict()
+        except AttributeError:
+            if isinstance(decision, dict):
+                decision_dict = decision
+            else:
+                return {
+                    "status": "rejected",
+                    "reason": "decision_missing"
+                }
+
+        action = decision_dict.get("action")
+        if action == "HOLD":
+            return {
+                "status": "hold",
+                "reason": "exit_not_required",
+                "decision": decision_dict
+            }
+
+        if action == "NO_POSITION":
+            return {
+                "status": "rejected",
+                "reason": "position_missing",
+                "decision": decision_dict
+            }
+
+        if action in ("TAKE_PROFIT", "STOP_LOSS"):
+            symbol = decision_dict.get("symbol")
+            quantity = decision_dict.get("quantity")
+            price = decision_dict.get("current_price")
+            return self.account.sell(symbol, quantity, price, metadata=decision_dict)
+
+        return {
+            "status": "rejected",
+            "reason": "unknown_exit_action",
+            "decision": decision_dict
+        }
+
 
 
