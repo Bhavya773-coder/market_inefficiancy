@@ -189,15 +189,27 @@ def main():
     quote_tgt_2 = None
     if not report["quote_fetch_failed"]:
         try:
-            quote_ref_2 = connector.get_last_price(REFERENCE["exchange"], REFERENCE["security_id"])
-            quote_ref_2["symbol"] = REFERENCE["symbol"]
-            quote_ref_2["mock"] = False
-            quote_ref_2["data_source"] = "dhan_live"
-
-            quote_tgt_2 = connector.get_last_price(TARGET["exchange"], TARGET["security_id"])
-            quote_tgt_2["symbol"] = TARGET["symbol"]
-            quote_tgt_2["mock"] = False
-            quote_tgt_2["data_source"] = "dhan_live"
+            batch_result = connector.get_last_prices(
+                "NSE_EQ",
+                [REFERENCE["security_id"], TARGET["security_id"]]
+            )
+            
+            # Map quotes by security_id
+            for q in batch_result.get("quotes", []):
+                sec_id = q["security_id"]
+                if sec_id == REFERENCE["security_id"]:
+                    quote_ref_2 = q.copy()
+                    quote_ref_2["symbol"] = REFERENCE["symbol"]
+                    quote_ref_2["mock"] = False
+                    quote_ref_2["data_source"] = "dhan_live"
+                elif sec_id == TARGET["security_id"]:
+                    quote_tgt_2 = q.copy()
+                    quote_tgt_2["symbol"] = TARGET["symbol"]
+                    quote_tgt_2["mock"] = False
+                    quote_tgt_2["data_source"] = "dhan_live"
+            
+            if not quote_ref_2 or not quote_tgt_2:
+                raise ValueError(f"One or both instruments missing from batch result: {batch_result}")
         except Exception as e:
             print(f"Error during second quote fetch: {e}")
             report["quote_fetch_failed"] = True
