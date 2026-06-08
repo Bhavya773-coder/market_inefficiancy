@@ -1,4 +1,5 @@
 from ai.paper_trading_account import PaperTradingAccount
+from ai.paper_position_exit_evaluator import PaperPositionExitEvaluator
 
 class PaperTradeSimulator:
     """
@@ -84,3 +85,12 @@ class PaperTradeSimulator:
 
         asset = candidate_dict.get("asset")
         return self.account.buy(asset, quantity, price, metadata=candidate_dict)
+
+    def evaluate_position_exit(self, symbol, current_price, target_profit_pct=0.50, stop_loss_pct=0.25):
+        """
+        Evaluates whether an active paper position should be exited or held.
+        """
+        evaluator = PaperPositionExitEvaluator()
+        position = self.account.positions.get(symbol)
+        return evaluator.evaluate(symbol, position, current_price, target_profit_pct, stop_loss_pct)
+
