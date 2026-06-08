@@ -13,19 +13,17 @@ from ai.paper_trade_candidate_factory import PaperTradeCandidateFactory
 from ai.candidate_feasibility_adapter import CandidateFeasibilityAdapter
 from ai.paper_entry_decision import PaperEntryDecision
 from ai.paper_trade_simulator import PaperTradeSimulator
+from ai.live_dhan_pair_selector import LiveDhanPairSelector
 import pprint
 
-REFERENCE = {
-    "symbol": "SETFNIF50",
-    "exchange": "NSE_EQ",
-    "security_id": 10176
-}
-
-TARGET = {
-    "symbol": "HDFCNEXT50",
-    "exchange": "NSE_EQ",
-    "security_id": 10619
-}
+CANDIDATES = [
+    {"symbol": "SETFNIF50", "exchange": "NSE_EQ", "security_id": 10176},
+    {"symbol": "HDFCNEXT50", "exchange": "NSE_EQ", "security_id": 10619},
+    {"symbol": "MOVALUE", "exchange": "NSE_EQ", "security_id": 10825},
+    {"symbol": "HDFCVALUE", "exchange": "NSE_EQ", "security_id": 11260},
+    {"symbol": "HDFCNIFTY", "exchange": "NSE_EQ", "security_id": 11591},
+    {"symbol": "NIFTYBEES", "exchange": "NSE_EQ", "security_id": 10576}
+]
 
 def score_readiness(report):
     score = 100
@@ -90,13 +88,60 @@ def score_readiness(report):
 
 def main():
     print("=== LIVE DHAN ENGINE READINESS DIAGNOSTIC ===")
+    
+    # Initialize pair selector
+    print("Selecting working live pair from candidates...")
+    pair_result = LiveDhanPairSelector().select_pair(CANDIDATES)
+    
+    if not pair_result["ready"]:
+        print("REFERENCE CONFIG: None")
+        print("TARGET CONFIG: None")
+        print("\nLIVE DATA SOURCE:")
+        print("dhan_live\n")
+        print("STATUS: FAIL")
+        print("Reason: not_enough_live_working_instruments")
+        
+        # Report with fetch failure
+        report = {
+            "quote_fetch_failed": True,
+            "timestamps_not_close": True,
+            "no_price_movement": True,
+            "lag_result_none": True,
+            "opportunity_none": True,
+            "validation_invalid": True,
+            "candidate_none": True,
+            "not_feasible": True,
+            "entry_decision_not_buy_allowed": True
+        }
+        res = score_readiness(report)
+        print("\n" + "="*50)
+        print("LIVE ENGINE READINESS SCORE:")
+        print(f"{res['score']}/100")
+        print("GRADE:")
+        print(res["grade"])
+        if res["blocking_issues"]:
+            print("BLOCKING ISSUES:")
+            for issue in res["blocking_issues"]:
+                print(f" - {issue}")
+        if res["warnings"]:
+            print("WARNINGS:")
+            for warning in res["warnings"]:
+                print(f" - {warning}")
+        print("\nREAL ORDER APIs USED: NO")
+        print("MOCK DATA USED: NO")
+        print("="*50)
+        return
+
+    REFERENCE = pair_result["reference"]["config"]
+    TARGET = pair_result["target"]["config"]
+    
     print("REFERENCE CONFIG:")
     pprint.pprint(REFERENCE)
     print("TARGET CONFIG:")
     pprint.pprint(TARGET)
     print("\nLIVE DATA SOURCE:")
     print("dhan_live\n")
-    
+
     # Initialize report
     report = {
         "quote_fetch_failed": False,
@@ -120,23 +165,10 @@ def main():
     feasibility_adapter = CandidateFeasibilityAdapter()
     simulator = PaperTradeSimulator()
 
-    # Step 1 & 2: Fetch first quote
-    print("\n1. Fetching first quotes...")
-    quote_ref_1 = None
-    quote_tgt_1 = None
-    try:
-        quote_ref_1 = connector.get_last_price(REFERENCE["exchange"], REFERENCE["security_id"])
-        quote_ref_1["symbol"] = REFERENCE["symbol"]
-        quote_ref_1["mock"] = False
-        quote_ref_1["data_source"] = "dhan_live"
-
-        quote_tgt_1 = connector.get_last_price(TARGET["exchange"], TARGET["security_id"])
-        quote_tgt_1["symbol"] = TARGET["symbol"]
-        quote_tgt_1["mock"] = False
-        quote_tgt_1["data_source"] = "dhan_live"
-    except Exception as e:
-        print(f"Error during first quote fetch: {e}")
-        report["quote_fetch_failed"] = True
+    # Step 1 & 2: Use first quotes already fetched by pair selector
+    print("\n1. Using first quotes from pair selector...")
+    quote_ref_1 = pair_result["reference"]["quote"]
+    quote_tgt_1 = pair_result["target"]["quote"]
 
     print(f"quote_ref_1: {quote_ref_1}")
     print(f"quote_tgt_1: {quote_tgt_1}")
