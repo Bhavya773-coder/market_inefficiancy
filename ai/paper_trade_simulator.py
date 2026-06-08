@@ -1,5 +1,7 @@
 from ai.paper_trading_account import PaperTradingAccount
 from ai.paper_position_exit_evaluator import PaperPositionExitEvaluator
+from ai.paper_exit_decision import PaperExitDecision
+
 
 class PaperTradeSimulator:
     """
@@ -93,4 +95,12 @@ class PaperTradeSimulator:
         evaluator = PaperPositionExitEvaluator()
         position = self.account.positions.get(symbol)
         return evaluator.evaluate(symbol, position, current_price, target_profit_pct, stop_loss_pct)
+
+    def create_exit_decision(self, symbol, current_price, target_profit_pct=0.50, stop_loss_pct=0.25):
+        """
+        Creates a structured PaperExitDecision for an active paper position.
+        """
+        evaluation = self.evaluate_position_exit(symbol, current_price, target_profit_pct, stop_loss_pct)
+        return PaperExitDecision.from_evaluation(evaluation)
+
 
