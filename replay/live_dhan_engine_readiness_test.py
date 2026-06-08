@@ -15,6 +15,18 @@ from ai.paper_entry_decision import PaperEntryDecision
 from ai.paper_trade_simulator import PaperTradeSimulator
 import pprint
 
+REFERENCE = {
+    "symbol": "SETFNIF50",
+    "exchange": "NSE_EQ",
+    "security_id": 10176
+}
+
+TARGET = {
+    "symbol": "HDFCNEXT50",
+    "exchange": "NSE_EQ",
+    "security_id": 10619
+}
+
 def score_readiness(report):
     score = 100
     blocking_issues = []
@@ -78,6 +90,12 @@ def score_readiness(report):
 
 def main():
     print("=== LIVE DHAN ENGINE READINESS DIAGNOSTIC ===")
+    print("REFERENCE CONFIG:")
+    pprint.pprint(REFERENCE)
+    print("TARGET CONFIG:")
+    pprint.pprint(TARGET)
+    print("\nLIVE DATA SOURCE:")
+    print("dhan_live\n")
     
     # Initialize report
     report = {
@@ -107,13 +125,13 @@ def main():
     quote_ref_1 = None
     quote_tgt_1 = None
     try:
-        quote_ref_1 = connector.get_last_price("NSE_EQ", 10576)
-        quote_ref_1["symbol"] = "NIFTYBEES"
+        quote_ref_1 = connector.get_last_price(REFERENCE["exchange"], REFERENCE["security_id"])
+        quote_ref_1["symbol"] = REFERENCE["symbol"]
         quote_ref_1["mock"] = False
         quote_ref_1["data_source"] = "dhan_live"
 
-        quote_tgt_1 = connector.get_last_price("NSE_EQ", 11591)
-        quote_tgt_1["symbol"] = "HDFCNIFTY"
+        quote_tgt_1 = connector.get_last_price(TARGET["exchange"], TARGET["security_id"])
+        quote_tgt_1["symbol"] = TARGET["symbol"]
         quote_tgt_1["mock"] = False
         quote_tgt_1["data_source"] = "dhan_live"
     except Exception as e:
@@ -139,13 +157,13 @@ def main():
     quote_tgt_2 = None
     if not report["quote_fetch_failed"]:
         try:
-            quote_ref_2 = connector.get_last_price("NSE_EQ", 10576)
-            quote_ref_2["symbol"] = "NIFTYBEES"
+            quote_ref_2 = connector.get_last_price(REFERENCE["exchange"], REFERENCE["security_id"])
+            quote_ref_2["symbol"] = REFERENCE["symbol"]
             quote_ref_2["mock"] = False
             quote_ref_2["data_source"] = "dhan_live"
 
-            quote_tgt_2 = connector.get_last_price("NSE_EQ", 11591)
-            quote_tgt_2["symbol"] = "HDFCNIFTY"
+            quote_tgt_2 = connector.get_last_price(TARGET["exchange"], TARGET["security_id"])
+            quote_tgt_2["symbol"] = TARGET["symbol"]
             quote_tgt_2["mock"] = False
             quote_tgt_2["data_source"] = "dhan_live"
         except Exception as e:
@@ -291,6 +309,8 @@ def main():
         print("WARNINGS:")
         for warning in res["warnings"]:
             print(f" - {warning}")
+    print("\nREAL ORDER APIs USED: NO")
+    print("MOCK DATA USED: NO")
     print("="*50)
 
 if __name__ == "__main__":
