@@ -3,6 +3,9 @@
 from ai.paper_trading_account import PaperTradingAccount
 from ai.paper_position_exit_evaluator import PaperPositionExitEvaluator
 from ai.paper_exit_decision import PaperExitDecision
+from ai.candidate_feasibility_adapter import CandidateFeasibilityAdapter
+from ai.paper_entry_decision import PaperEntryDecision
+
 
 
 
@@ -105,6 +108,15 @@ class PaperTradeSimulator:
         """
         evaluation = self.evaluate_position_exit(symbol, current_price, target_profit_pct, stop_loss_pct)
         return PaperExitDecision.from_evaluation(evaluation)
+
+    def create_entry_decision(self, candidate, quantity=1, price=None):
+        """
+        Creates a structured PaperEntryDecision about entering a paper candidate.
+        """
+        adapter = CandidateFeasibilityAdapter()
+        feasibility_result = adapter.from_candidate(candidate)
+        return PaperEntryDecision.from_feasibility(feasibility_result, quantity, price)
+
 
     def close_position_from_decision(self, decision):
         """
