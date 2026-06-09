@@ -117,6 +117,52 @@ class PaperTradeSimulator:
         feasibility_result = adapter.from_candidate(candidate)
         return PaperEntryDecision.from_feasibility(feasibility_result, quantity, price)
 
+    def execute_entry_decision(self, decision):
+        """
+        Executes an entry decision if allowed.
+        """
+        if decision is None:
+            return {
+                "status": "rejected",
+                "reason": "decision_missing"
+            }
+
+        try:
+            decision_dict = decision.to_dict()
+        except AttributeError:
+            if isinstance(decision, dict):
+                decision_dict = decision
+            else:
+                return {
+                    "status": "rejected",
+                    "reason": "decision_missing"
+                }
+
+        if decision_dict.get("action") != "BUY_ALLOWED":
+            return {
+                "status": "rejected",
+                "reason": "entry_not_allowed",
+                "decision": decision_dict
+            }
+
+        if decision_dict.get("price") is None:
+            return {
+                "status": "rejected",
+                "reason": "price_missing",
+                "decision": decision_dict
+            }
+
+        if decision_dict.get("asset") is None:
+            return {
+                "status": "rejected",
+                "reason": "asset_missing",
+                "decision": decision_dict
+            }
+
+        symbol = decision_dict["asset"]
+        quantity = decision_dict["quantity"]
+        price = decision_dict["price"]
+        return self.account.buy(symbol, quantity, price, metadata=decision_dict)
 
     def close_position_from_decision(self, decision):
         """
