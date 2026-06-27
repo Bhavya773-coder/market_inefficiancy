@@ -353,18 +353,18 @@ def main():
     # SCENARIO 12 — Input immutability
     # -------------------------------------------------------------------------
     print("\nScenario 12: Input immutability")
-    target_res_copy = copy.deepcopy(res_s1["targets"]["STEEL_FUTURE"])
-    det_res_copy = copy.deepcopy(res_s1)
-    
+    target_res_copy_s1 = copy.deepcopy(res_s1["targets"]["STEEL_FUTURE"])
     test_ep = SteelInefficiencyEpisode.from_detection(res_s1["targets"]["STEEL_FUTURE"], t1)
-    assert res_s1["targets"]["STEEL_FUTURE"] == target_res_copy
+    assert res_s1["targets"]["STEEL_FUTURE"] == target_res_copy_s1, "from_detection() mutated target_result"
     
+    target_res_copy_s2 = copy.deepcopy(res_s2["targets"]["STEEL_FUTURE"])
     test_ep.update(res_s2["targets"]["STEEL_FUTURE"], t2)
-    assert res_s2["targets"]["STEEL_FUTURE"] == copy.deepcopy(res_s2["targets"]["STEEL_FUTURE"])
+    assert res_s2["targets"]["STEEL_FUTURE"] == target_res_copy_s2, "update() mutated target_result"
     
+    det_res_copy = copy.deepcopy(res_s1)
     test_tracker = SteelInefficiencyEpisodeTracker()
     test_tracker.process(res_s1, t1)
-    assert res_s1 == det_res_copy
+    assert res_s1 == det_res_copy, "process() mutated detection_result"
     print("Inputs verified as fully immutable.")
 
     # -------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import math
 import uuid
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -33,6 +34,28 @@ def _validate_target_result(target_result: Dict[str, Any], observed_at: datetime
                 raise TypeError(f"Value for key '{key}' must be a float or int, got {type(val).__name__}")
             if math.isnan(val) or math.isinf(val):
                 raise ValueError(f"Value for key '{key}' cannot be NaN or infinity")
+
+    # Validate contributors when present
+    if "contributors" in target_result and target_result["contributors"] is not None:
+        contribs = target_result["contributors"]
+        if not isinstance(contribs, list):
+            raise TypeError("contributors must be a list")
+        for c in contribs:
+            if not isinstance(c, dict):
+                raise TypeError("Each contributor must be a dictionary")
+            
+            # Numeric fields to validate
+            contrib_numeric_keys = ["change", "weight", "direction_multiplier", "contribution"]
+            for key in contrib_numeric_keys:
+                if key not in c:
+                    raise KeyError(f"Contributor missing numeric key: {key}")
+                val = c[key]
+                if isinstance(val, bool):
+                    raise TypeError(f"Contributor value for key '{key}' cannot be a boolean")
+                if not isinstance(val, (int, float)):
+                    raise TypeError(f"Contributor value for key '{key}' must be a float or int, got {type(val).__name__}")
+                if math.isnan(val) or math.isinf(val):
+                    raise ValueError(f"Contributor value for key '{key}' cannot be NaN or infinity")
 
 @dataclass
 class SteelInefficiencyEpisode:
@@ -89,6 +112,22 @@ class SteelInefficiencyEpisode:
             "is_inefficient": target_result["is_inefficient"]
         }
         
+        # Additional learning metadata
+        additional_keys = [
+            "raw_pressure_score",
+            "expected_change_basis",
+            "is_historically_calibrated",
+            "total_possible_weight",
+            "observed_weight",
+            "explanation"
+        ]
+        for key in additional_keys:
+            if key in target_result:
+                obs[key] = copy.deepcopy(target_result[key])
+                
+        if "contributors" in target_result:
+            obs["contributors"] = copy.deepcopy(target_result["contributors"])
+        
         return cls(
             episode_id=episode_id,
             target=target_result["target"],
@@ -104,7 +143,7 @@ class SteelInefficiencyEpisode:
             latest_actual_change=target_result["actual_change"],
             opening_residual_gap=target_result["residual_gap"],
             latest_residual_gap=target_result["residual_gap"],
-            opening_inefficiency_score=target_result["opening_inefficiency_score"] if "opening_inefficiency_score" in target_result else target_result["inefficiency_score"],
+            opening_inefficiency_score=target_result["inefficiency_score"],
             latest_inefficiency_score=target_result["inefficiency_score"],
             opening_coverage_ratio=target_result["coverage_ratio"],
             latest_coverage_ratio=target_result["coverage_ratio"],
@@ -169,6 +208,23 @@ class SteelInefficiencyEpisode:
             "recommended_direction": target_result["recommended_direction"],
             "is_inefficient": target_result["is_inefficient"]
         }
+        
+        # Additional learning metadata
+        additional_keys = [
+            "raw_pressure_score",
+            "expected_change_basis",
+            "is_historically_calibrated",
+            "total_possible_weight",
+            "observed_weight",
+            "explanation"
+        ]
+        for key in additional_keys:
+            if key in target_result:
+                obs[key] = copy.deepcopy(target_result[key])
+                
+        if "contributors" in target_result:
+            obs["contributors"] = copy.deepcopy(target_result["contributors"])
+            
         self.observations.append(obs)
 
     def close(self, outcome: str, closed_at: datetime):
@@ -216,7 +272,7 @@ class SteelInefficiencyEpisode:
             
         serialized_obs = []
         for o in self.observations:
-            serialized_obs.append({
+            obs_dict = {
                 "observed_at": clean_dt(o["observed_at"]),
                 "status": o["status"],
                 "expected_change": rnd_val(o["expected_change"]),
@@ -227,9 +283,43 @@ class SteelInefficiencyEpisode:
                 "coverage_ratio": rnd_val(o["coverage_ratio"]),
                 "recommended_direction": o["recommended_direction"],
                 "is_inefficient": o["is_inefficient"]
-            })
+            }
+            
+            # Additional learning metadata fields
+            if "raw_pressure_score" in o:
+                obs_dict["raw_pressure_score"] = rnd_val(o["raw_pressure_score"])
+            if "expected_change_basis" in o:
+                obs_dict["expected_change_basis"] = o["expected_change_basis"]
+            if "is_historically_calibrated" in o:
+                obs_dict["is_historically_calibrated"] = o["is_historically_calibrated"]
+            if "total_possible_weight" in o:
+                obs_dict["total_possible_weight"] = rnd_val(o["total_possible_weight"])
+            if "observed_weight" in o:
+                obs_dict["observed_weight"] = rnd_val(o["observed_weight"])
+            if "explanation" in o:
+                obs_dict["explanation"] = o["explanation"]
+                
+            if "contributors" in o:
+                if o["contributors"] is None:
+                    obs_dict["contributors"] = None
+                else:
+                    serialized_contribs = []
+                    for c in o["contributors"]:
+                        serialized_contribs.append({
+                            "source": c["source"],
+                            "change": rnd_val(c["change"]),
+                            "weight": rnd_val(c["weight"]),
+                            "relationship_direction": c["relationship_direction"],
+                            "direction_multiplier": rnd_val(c["direction_multiplier"]),
+                            "contribution": rnd_val(c["contribution"])
+                        })
+                    obs_dict["contributors"] = serialized_contribs
+            
+            serialized_obs.append(obs_dict)
             
         return {
+            "schema_version": "1.0",
+            "episode_type": "steel_inefficiency_episode",
             "episode_id": self.episode_id,
             "target": self.target,
             "recommended_direction": self.recommended_direction,
@@ -252,6 +342,7 @@ class SteelInefficiencyEpisode:
             "uncertain_update_count": self.uncertain_update_count,
             "max_favorable_excursion": rnd_val(self.max_favorable_excursion),
             "max_adverse_excursion": rnd_val(self.max_adverse_excursion),
+            "duration_seconds": rnd_val(self.duration_seconds),
             "convergence_time_seconds": rnd_val(self.convergence_time_seconds),
             "outcome": self.outcome,
             "is_open": self.is_open,
