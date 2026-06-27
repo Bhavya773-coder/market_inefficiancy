@@ -6,10 +6,12 @@ class SteelInefficiencyEpisodeTracker:
     def __init__(
         self,
         convergence_gap_threshold: float = 0.35,
-        max_episode_age_seconds: Optional[float] = None
+        max_episode_age_seconds: Optional[float] = None,
+        episode_id_factory: Optional[Any] = None
     ):
         self.convergence_gap_threshold = convergence_gap_threshold
         self.max_episode_age_seconds = max_episode_age_seconds
+        self.episode_id_factory = episode_id_factory
         
         self._active_by_target: Dict[str, SteelInefficiencyEpisode] = {}
         self._closed_episodes: List[SteelInefficiencyEpisode] = []
@@ -81,7 +83,14 @@ class SteelInefficiencyEpisodeTracker:
             if active_ep is None:
                 # Rule A: No active episode
                 if target_result.get("is_inefficient") and target_result.get("recommended_direction") in ("LONG_TARGET", "SHORT_TARGET"):
-                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at)
+                    ep_id = None
+                    if self.episode_id_factory is not None:
+                        ep_id = self.episode_id_factory(
+                            target,
+                            target_result.get("recommended_direction"),
+                            observed_at
+                        )
+                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at, episode_id=ep_id)
                     self._active_by_target[target] = new_ep
                     opened_this_step.append(new_ep)
             else:
@@ -136,7 +145,14 @@ class SteelInefficiencyEpisodeTracker:
                     closed_this_step.append(active_ep)
 
                     # Open new immediately
-                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at)
+                    ep_id = None
+                    if self.episode_id_factory is not None:
+                        ep_id = self.episode_id_factory(
+                            target,
+                            target_result.get("recommended_direction"),
+                            observed_at
+                        )
+                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at, episode_id=ep_id)
                     self._active_by_target[target] = new_ep
                     opened_this_step.append(new_ep)
                     continue

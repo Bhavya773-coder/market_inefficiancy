@@ -99,7 +99,7 @@ class SteelInefficiencyEpisode:
     observations: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
-    def from_detection(cls, target_result: Dict[str, Any], observed_at: datetime) -> "SteelInefficiencyEpisode":
+    def from_detection(cls, target_result: Dict[str, Any], observed_at: datetime, episode_id: Optional[str] = None) -> "SteelInefficiencyEpisode":
         _validate_target_result(target_result, observed_at)
         
         if not target_result.get("is_inefficient"):
@@ -109,7 +109,12 @@ class SteelInefficiencyEpisode:
         if direction not in ("LONG_TARGET", "SHORT_TARGET"):
             raise ValueError(f"Invalid recommended_direction: {direction}")
             
-        episode_id = str(uuid.uuid4())
+        if episode_id is not None:
+            if not isinstance(episode_id, str) or not episode_id.strip():
+                raise ValueError("episode_id must be a non-empty string")
+            ep_id = episode_id
+        else:
+            ep_id = str(uuid.uuid4())
         
         obs = {
             "observed_at": observed_at,
@@ -141,7 +146,7 @@ class SteelInefficiencyEpisode:
             obs["contributors"] = copy.deepcopy(target_result["contributors"])
         
         return cls(
-            episode_id=episode_id,
+            episode_id=ep_id,
             target=target_result["target"],
             recommended_direction=direction,
             opened_at=observed_at,
