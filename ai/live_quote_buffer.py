@@ -5,19 +5,24 @@ from zoneinfo import ZoneInfo
 
 class LiveQuoteBuffer:
     """
-    Maintains the most recent quote and update statistics for every instrument.
+    Maintains the most recent quote and update statistics for every instrument,
+    hardened against stale provider snapshots.
     """
     def __init__(
         self,
         max_quote_age_seconds=10.0,
         max_pair_gap_seconds=10.0,
         min_updates_for_active=2,
-        activity_window_seconds=30.0
+        activity_window_seconds=30.0,
+        max_provider_age_seconds=10.0,
+        min_provider_timestamp_advances_for_active=1
     ):
         self.max_quote_age_seconds = float(max_quote_age_seconds)
         self.max_pair_gap_seconds = float(max_pair_gap_seconds)
         self.min_updates_for_active = int(min_updates_for_active)
         self.activity_window_seconds = float(activity_window_seconds)
+        self.max_provider_age_seconds = float(max_provider_age_seconds)
+        self.min_provider_timestamp_advances_for_active = int(min_provider_timestamp_advances_for_active)
         
         self.quotes = {}  # key: "exchange:security_id" -> stored_quote dict
         self.stats = {}   # key: "exchange:security_id" -> stats dict
@@ -42,7 +47,7 @@ class LiveQuoteBuffer:
 
     def update_quote(self, quote, received_at=None, received_monotonic=None):
         """
-        Updates the buffer with a new quote. Performs strict type and value validation.
+        Updates the buffer with a new quote. Performs strict validation and updates statistics.
         """
         if not isinstance(quote, dict):
             raise TypeError("quote must be a dictionary")
@@ -99,7 +104,9 @@ class LiveQuoteBuffer:
             "received_at": received_at,
             "received_monotonic": received_monotonic,
             "data_source": quote.get("data_source", ""),
-            "raw_quote": quote
+            "raw_quote": quote,
+            # Phase 5: timestamp key containing normalized provider timestamp
+            "timestamp": provider_ts
         }
 
         key = f"{exchange}:{security_id}"
@@ -109,9 +116,13 @@ class LiveQuoteBuffer:
                 "latest_quote": None,
                 "previous_quote": None,
                 "update_count": 0,
+                "provider_timestamp_advance_count": 0,
+                "duplicate_provider_snapshot_count": 0,
                 "price_change_count": 0,
                 "last_received_at": None,
                 "first_received_at": received_at,
+                "last_provider_timestamp": None,
+                "last_provider_timestamp_advanced_at": None,
                 "recent_updates": [],
                 "recent_provider_ts": []
             }
@@ -119,19 +130,36 @@ class LiveQuoteBuffer:
         stats = self.stats[key]
         prev_quote = stats["latest_quote"]
         
+        is_duplicate = False
+        is_advanced = False
+        
+        if provider_ts is not None:
+            if stats["last_provider_timestamp"] is not None:
+                if provider_ts > stats["last_provider_timestamp"]:
+                    is_advanced = True
+                elif provider_ts == stats["last_provider_timestamp"]:
+                    is_duplicate = True
+            else:
+                is_advanced = True
+
         stats["previous_quote"] = prev_quote
         stats["latest_quote"] = stored_quote
         stats["update_count"] += 1
+        stats["last_received_at"] = received_at
+        stats["recent_updates"].append(received_at)
         
+        if is_advanced:
+            stats["provider_timestamp_advance_count"] += 1
+            stats["last_provider_timestamp"] = provider_ts
+            stats["last_provider_timestamp_advanced_at"] = received_at
+            stats["recent_provider_ts"].append(provider_ts)
+        elif is_duplicate:
+            stats["duplicate_provider_snapshot_count"] += 1
+            
         if prev_quote is not None:
             if stored_quote["last_price"] != prev_quote["last_price"]:
                 stats["price_change_count"] += 1
                 
-        stats["last_received_at"] = received_at
-        stats["recent_updates"].append(received_at)
-        if provider_ts:
-            stats["recent_provider_ts"].append(provider_ts)
-            
         self.quotes[key] = stored_quote
 
     def latest(self, exchange, security_id):
@@ -170,6 +198,8 @@ class LiveQuoteBuffer:
             return None
         return {
             "update_count": s["update_count"],
+            "provider_timestamp_advance_count": s["provider_timestamp_advance_count"],
+            "duplicate_provider_snapshot_count": s["duplicate_provider_snapshot_count"],
             "price_change_count": s["price_change_count"],
             "last_received_at": s["last_received_at"].isoformat() if s["last_received_at"] else None,
             "first_received_at": s["first_received_at"].isoformat() if s["first_received_at"] else None,
@@ -195,12 +225,17 @@ class LiveQuoteBuffer:
                 "instrument_key": key,
                 "has_quote": False,
                 "update_count": 0,
+                "provider_timestamp_advance_count": 0,
+                "duplicate_provider_snapshot_count": 0,
                 "price_change_count": 0,
                 "last_price": None,
                 "provider_timestamp": None,
                 "received_at": None,
                 "local_age_seconds": None,
+                "provider_age_seconds": None,
                 "is_locally_fresh": False,
+                "is_provider_fresh": False,
+                "provider_timestamp_advanced_recently": False,
                 "is_active": False,
                 "updates_in_activity_window": 0,
                 "reason": "no_quote_received"
@@ -212,6 +247,20 @@ class LiveQuoteBuffer:
         local_age_seconds = (now - quote["received_at"]).total_seconds()
         is_locally_fresh = local_age_seconds <= self.max_quote_age_seconds
         
+        provider_age_seconds = None
+        is_provider_fresh = False
+        provider_timestamp_advanced_recently = False
+        
+        provider_ts = quote["provider_timestamp"]
+        if provider_ts is not None:
+            provider_age_seconds = (now - provider_ts).total_seconds()
+            is_provider_fresh = provider_age_seconds <= self.max_provider_age_seconds
+            
+        last_adv = stats["last_provider_timestamp_advanced_at"]
+        if last_adv is not None:
+            adv_age = (now - last_adv).total_seconds()
+            provider_timestamp_advanced_recently = adv_age <= self.activity_window_seconds
+
         recent_updates_in_window = [
             t for t in stats["recent_updates"] 
             if (now - t).total_seconds() <= self.activity_window_seconds
@@ -225,28 +274,46 @@ class LiveQuoteBuffer:
         
         updates_in_activity_window = len(recent_updates_in_window)
         has_min_updates = stats["update_count"] >= self.min_updates_for_active
-        has_min_window_updates = updates_in_activity_window >= self.min_updates_for_active
-        
-        is_active = has_min_updates and is_locally_fresh and has_min_window_updates
+        has_min_advances = stats["provider_timestamp_advance_count"] >= self.min_provider_timestamp_advances_for_active
+
+        is_active = (
+            has_min_updates and
+            is_locally_fresh and
+            (provider_ts is not None) and
+            is_provider_fresh and
+            has_min_advances and
+            provider_timestamp_advanced_recently
+        )
         
         reason = "active"
         if not has_min_updates:
             reason = "insufficient_total_updates"
         elif not is_locally_fresh:
             reason = "locally_stale"
-        elif not has_min_window_updates:
-            reason = "insufficient_updates_in_activity_window"
+        elif provider_ts is None:
+            reason = "missing_or_unparseable_provider_timestamp"
+        elif not is_provider_fresh:
+            reason = "provider_stale"
+        elif not has_min_advances:
+            reason = "insufficient_provider_timestamp_advances"
+        elif not provider_timestamp_advanced_recently:
+            reason = "no_recent_provider_timestamp_advance"
 
         return {
             "instrument_key": key,
             "has_quote": True,
             "update_count": stats["update_count"],
+            "provider_timestamp_advance_count": stats["provider_timestamp_advance_count"],
+            "duplicate_provider_snapshot_count": stats["duplicate_provider_snapshot_count"],
             "price_change_count": stats["price_change_count"],
             "last_price": quote["last_price"],
             "provider_timestamp": quote["provider_timestamp"],
             "received_at": quote["received_at"],
             "local_age_seconds": local_age_seconds,
+            "provider_age_seconds": provider_age_seconds,
             "is_locally_fresh": is_locally_fresh,
+            "is_provider_fresh": is_provider_fresh,
+            "provider_timestamp_advanced_recently": provider_timestamp_advanced_recently,
             "is_active": is_active,
             "updates_in_activity_window": updates_in_activity_window,
             "reason": reason
@@ -314,6 +381,10 @@ class LiveQuoteBuffer:
             
         pair_is_synchronized = both_active and len(blocking_reasons) == 0
         
+        reference_quote_sequence = ref_status["update_count"]
+        target_quote_sequence = tgt_status["update_count"]
+        snapshot_identity = f"{ref_status['provider_timestamp_advance_count']}:{tgt_status['provider_timestamp_advance_count']}"
+        
         return {
             "reference": ref_status,
             "target": tgt_status,
@@ -322,5 +393,8 @@ class LiveQuoteBuffer:
             "provider_timestamp_gap_seconds": provider_ts_gap,
             "provider_timestamps_comparable": provider_timestamps_comparable,
             "pair_is_synchronized": pair_is_synchronized,
-            "blocking_reasons": blocking_reasons
+            "blocking_reasons": blocking_reasons,
+            "reference_quote_sequence": reference_quote_sequence,
+            "target_quote_sequence": target_quote_sequence,
+            "snapshot_identity": snapshot_identity
         }

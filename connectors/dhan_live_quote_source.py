@@ -1,10 +1,11 @@
 import time
+import ast
 from datetime import datetime, timezone
 
 class DhanLiveQuoteSource:
     """
     Interface for live quote updates from Dhan. Currently implements POLL mode
-    via the DhanConnector batch quotes API.
+    via the DhanConnector batch quotes API with rich, sanitized diagnostics.
     """
     def __init__(self, connector, quote_buffer, poll_interval_seconds=1.0):
         self.connector = connector
@@ -12,6 +13,12 @@ class DhanLiveQuoteSource:
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.instruments = []
         self._running = False
+        
+        # Diagnostics
+        self.sanitized_errors = []
+        self.api_errors_by_code = {}
+        self.api_errors_by_type = {}
+        self.last_api_error = None
 
     def subscribe(self, instruments):
         """
@@ -25,6 +32,86 @@ class DhanLiveQuoteSource:
         Stops the observation loop cleanly.
         """
         self._running = False
+
+    def _record_api_error(self, e, exchange, requested_security_count):
+        occurred_at = datetime.now(timezone.utc).isoformat()
+        err_type = type(e).__name__
+        
+        status = "error"
+        error_code = "UNKNOWN"
+        error_message = str(e)
+        classification = "unexpected_response_structure"
+        
+        if isinstance(e, ValueError) and "Invalid Dhan batch quote response" in error_message:
+            try:
+                start_idx = error_message.find("{")
+                if start_idx != -1:
+                    resp_dict_str = error_message[start_idx:]
+                    resp = ast.literal_eval(resp_dict_str)
+                    status = resp.get("status", "failure")
+                    
+                    remarks = resp.get("remarks", {})
+                    if isinstance(remarks, dict):
+                        error_code = remarks.get("error_code") or "unexpected_structure"
+                        error_message = remarks.get("error_message") or error_message
+                    else:
+                        error_code = "unexpected_structure"
+                        
+                    remarks_msg = str(remarks).lower()
+                    if "token" in remarks_msg or "expired" in remarks_msg or "auth" in remarks_msg:
+                        classification = "invalid_or_expired_token"
+                    elif "subscription" in remarks_msg or "subscribe" in remarks_msg:
+                        classification = "market_data_subscription_unavailable"
+                    elif "rate limit" in remarks_msg or "too many requests" in remarks_msg:
+                        classification = "rate_limit"
+                    elif "closed" in remarks_msg or "market closed" in remarks_msg:
+                        classification = "market_closed"
+                    elif "instrument" in remarks_msg or "security" in remarks_msg:
+                        classification = "invalid_exchange_or_instrument"
+            except Exception:
+                pass
+        else:
+            msg_lower = error_message.lower()
+            if "connection" in msg_lower or "timeout" in msg_lower or "unreachable" in msg_lower or "http" in msg_lower:
+                classification = "network_exception"
+                error_code = "NETWORK_ERROR"
+            elif "rate" in msg_lower:
+                classification = "rate_limit"
+                error_code = "RATE_LIMIT"
+            elif "token" in msg_lower or "auth" in msg_lower or "unauthorized" in msg_lower:
+                classification = "invalid_or_expired_token"
+                error_code = "AUTH_ERROR"
+            else:
+                classification = "unexpected_response_structure"
+                error_code = "API_ERROR"
+
+        # Sanitize credentials/tokens
+        for token_word in ["token", "access_token", "secret", "auth", "authorization"]:
+            if token_word in error_message.lower():
+                error_message = "Redacted: API response error containing sensitive credentials"
+                break
+                
+        sanitized_error = {
+            "error_type": err_type,
+            "status": status,
+            "error_code": error_code,
+            "error_message": error_message,
+            "exchange": exchange,
+            "requested_security_count": requested_security_count,
+            "occurred_at": occurred_at,
+            "classification": classification
+        }
+        
+        self.last_api_error = sanitized_error
+        self.sanitized_errors.append(sanitized_error)
+        
+        code_key = str(error_code)
+        self.api_errors_by_code[code_key] = self.api_errors_by_code.get(code_key, 0) + 1
+        
+        type_key = str(err_type)
+        self.api_errors_by_type[type_key] = self.api_errors_by_type.get(type_key, 0) + 1
+        
+        return sanitized_error
 
     def run_for(self, duration_seconds):
         """
@@ -94,7 +181,7 @@ class DhanLiveQuoteSource:
                         partial_error_count += len(errors)
 
                 except Exception as e:
-                    print(f"DhanLiveQuoteSource API error: {e}")
+                    self._record_api_error(e, exchange, len(sec_ids))
                     api_error_count += 1
 
             time.sleep(self.poll_interval_seconds)
@@ -111,5 +198,9 @@ class DhanLiveQuoteSource:
             "received_quote_count": received_quote_count,
             "api_error_count": api_error_count,
             "partial_error_count": partial_error_count,
+            "api_errors_by_code": self.api_errors_by_code,
+            "api_errors_by_type": self.api_errors_by_type,
+            "last_api_error": self.last_api_error,
+            "sanitized_errors": self.sanitized_errors,
             "buffer_snapshot": self.quote_buffer.snapshot()
         }
