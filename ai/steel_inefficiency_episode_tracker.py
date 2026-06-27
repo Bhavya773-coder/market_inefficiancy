@@ -1,0 +1,140 @@
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+from ai.steel_inefficiency_episode import SteelInefficiencyEpisode
+
+class SteelInefficiencyEpisodeTracker:
+    def __init__(
+        self,
+        convergence_gap_threshold: float = 0.35,
+        max_episode_age_seconds: Optional[float] = None
+    ):
+        self.convergence_gap_threshold = convergence_gap_threshold
+        self.max_episode_age_seconds = max_episode_age_seconds
+        
+        self._active_by_target: Dict[str, SteelInefficiencyEpisode] = {}
+        self._closed_episodes: List[SteelInefficiencyEpisode] = []
+        self.last_updated_at: Optional[datetime] = None
+
+    def active_for(self, target: str) -> Optional[SteelInefficiencyEpisode]:
+        return self._active_by_target.get(target)
+
+    def active_episodes(self) -> List[SteelInefficiencyEpisode]:
+        return list(self._active_by_target.values())
+
+    def closed_episodes(self) -> List[SteelInefficiencyEpisode]:
+        return self._closed_episodes
+
+    def all_episodes(self) -> List[SteelInefficiencyEpisode]:
+        return list(self._active_by_target.values()) + self._closed_episodes
+
+    def manually_close(self, target: str, closed_at: datetime):
+        active_ep = self._active_by_target.get(target)
+        if active_ep is None:
+            raise ValueError(f"No active episode to manually close for target: {target}")
+        active_ep.close("MANUALLY_CLOSED", closed_at)
+        self._active_by_target.pop(target)
+        self._closed_episodes.append(active_ep)
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "active": [ep.to_dict() for ep in self.active_episodes()],
+            "closed": [ep.to_dict() for ep in self.closed_episodes()],
+            "summary": {
+                "active_count": len(self.active_episodes()),
+                "closed_count": len(self.closed_episodes()),
+                "total_count": len(self.all_episodes()),
+                "converged_count": len([ep for ep in self.closed_episodes() if ep.outcome == "CONVERGED"]),
+                "reversed_count": len([ep for ep in self.closed_episodes() if ep.outcome == "DIRECTION_REVERSED"]),
+                "decayed_count": len([ep for ep in self.closed_episodes() if ep.outcome == "SIGNAL_DECAYED"]),
+                "expired_count": len([ep for ep in self.closed_episodes() if ep.outcome == "EXPIRED"])
+            }
+        }
+
+    def process(self, detection_result: Dict[str, Any], observed_at: datetime) -> Dict[str, Any]:
+        # Input Validation
+        if not isinstance(detection_result, dict):
+            raise TypeError("detection_result must be a dictionary")
+        if "targets" not in detection_result or not isinstance(detection_result["targets"], dict):
+            raise KeyError("detection_result must contain a 'targets' dictionary")
+        if not isinstance(observed_at, datetime) or observed_at.tzinfo is None or observed_at.tzinfo.utcoffset(observed_at) is None:
+            raise ValueError("observed_at must be a timezone-aware datetime")
+            
+        if self.last_updated_at is not None and observed_at < self.last_updated_at:
+            raise ValueError("observed_at cannot be earlier than tracker's last_updated_at")
+
+        opened_this_step = []
+        updated_this_step = []
+        closed_this_step = []
+
+        # Process each target in the detection result
+        for target, target_result in detection_result["targets"].items():
+            active_ep = self._active_by_target.get(target)
+
+            if active_ep is None:
+                # Rule A: No active episode
+                if target_result.get("is_inefficient") and target_result.get("recommended_direction") in ("LONG_TARGET", "SHORT_TARGET"):
+                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at)
+                    self._active_by_target[target] = new_ep
+                    opened_this_step.append(new_ep)
+            else:
+                # Rule B: Existing active episode
+                # Check target-specific time logic first
+                if observed_at < active_ep.last_updated_at:
+                    raise ValueError(f"observed_at {observed_at} is earlier than last_updated_at of active episode")
+
+                # Update the active episode first
+                active_ep.update(target_result, observed_at)
+                updated_this_step.append(active_ep)
+
+                # Evaluate closure rules
+                # 1. Expiry
+                if self.max_episode_age_seconds is not None and active_ep.duration_seconds >= self.max_episode_age_seconds:
+                    active_ep.close("EXPIRED", observed_at)
+                    self._active_by_target.pop(target)
+                    self._closed_episodes.append(active_ep)
+                    closed_this_step.append(active_ep)
+                    continue
+
+                # 2. Convergence
+                abs_gap = target_result.get("absolute_gap")
+                is_converged = (target_result.get("status") == "EFFICIENT") or (abs_gap is not None and abs_gap <= self.convergence_gap_threshold)
+                if is_converged:
+                    active_ep.close("CONVERGED", observed_at)
+                    self._active_by_target.pop(target)
+                    self._closed_episodes.append(active_ep)
+                    closed_this_step.append(active_ep)
+                    continue
+
+                # 3. Signal decay
+                if target_result.get("status") == "LOW_PRESSURE":
+                    active_ep.close("SIGNAL_DECAYED", observed_at)
+                    self._active_by_target.pop(target)
+                    self._closed_episodes.append(active_ep)
+                    closed_this_step.append(active_ep)
+                    continue
+
+                # 4. Direction reversal
+                is_ineff = target_result.get("is_inefficient")
+                rec_dir = target_result.get("recommended_direction")
+                if is_ineff and rec_dir in ("LONG_TARGET", "SHORT_TARGET") and rec_dir != active_ep.recommended_direction:
+                    # Close current
+                    active_ep.close("DIRECTION_REVERSED", observed_at)
+                    self._active_by_target.pop(target)
+                    self._closed_episodes.append(active_ep)
+                    closed_this_step.append(active_ep)
+
+                    # Open new immediately
+                    new_ep = SteelInefficiencyEpisode.from_detection(target_result, observed_at)
+                    self._active_by_target[target] = new_ep
+                    opened_this_step.append(new_ep)
+                    continue
+
+        self.last_updated_at = observed_at
+
+        return {
+            "opened": [ep.to_dict() for ep in opened_this_step],
+            "updated": [ep.to_dict() for ep in updated_this_step],
+            "closed": [ep.to_dict() for ep in closed_this_step],
+            "active_count": len(self._active_by_target),
+            "closed_count": len(self._closed_episodes)
+        }
