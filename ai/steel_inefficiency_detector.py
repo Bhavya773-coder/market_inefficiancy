@@ -18,13 +18,30 @@ class SteelInefficiencyDetector:
         self.calculator = SteelPressureCalculator()
         self.graph = SteelSignalGraph()
 
+    def _classify(self, expected_change, actual_change, absolute_gap, coverage_ratio):
+        if actual_change is None:
+            return "INSUFFICIENT_DATA"
+        if coverage_ratio < self.min_coverage_ratio:
+            return "LOW_COVERAGE"
+        if abs(expected_change) < self.min_expected_move:
+            return "LOW_PRESSURE"
+        if absolute_gap < self.gap_threshold:
+            return "EFFICIENT"
+        if (expected_change > 0 and actual_change < 0) or (expected_change < 0 and actual_change > 0):
+            return "DIVERGENCE"
+        if abs(actual_change) <= self.non_reaction_threshold:
+            return "NON_REACTION"
+        if ((expected_change > 0 and actual_change > 0) or (expected_change < 0 and actual_change < 0)) and abs(actual_change) < abs(expected_change):
+            return "UNDERREACTION"
+        return "OVERREACTION"
+
     def detect(self, market_changes):
         # Input Validation
         if not isinstance(market_changes, dict):
             raise TypeError("market_changes must be a dictionary")
 
         for k, v in market_changes.items():
-            # Reject bool (bool is a subclass of int, so check it first)
+            # Reject bool
             if isinstance(v, bool):
                 raise TypeError(f"Value for key '{k}' cannot be a boolean")
             if not isinstance(v, (int, float)):
@@ -32,7 +49,7 @@ class SteelInefficiencyDetector:
             if math.isnan(v) or math.isinf(v):
                 raise ValueError(f"Value for key '{k}' must be finite and not NaN/Inf")
 
-        # Calculate pressure
+        # Calculate pressure using the calculator
         pressure_res = self.calculator.calculate(market_changes)
         
         result_targets = {}
@@ -42,9 +59,14 @@ class SteelInefficiencyDetector:
         for target, target_data in pressure_res["targets"].items():
             # 1. Find all registered drivers
             drivers = self.graph.drivers_for(target)
-            total_possible_weight = sum(abs(d["weight"]) for d in drivers)
             
-            # 2. Calculate observed weight
+            # Exclude mixed relationships from total_possible_weight
+            total_possible_weight = sum(
+                abs(d["weight"]) for d in drivers 
+                if d.get("direction") in ("positive", "negative")
+            )
+            
+            # 2. Calculate observed weight (contributors from calculator excludes mixed)
             contributors = target_data["contributors"]
             observed_weight = sum(abs(c["weight"]) for c in contributors)
             
@@ -65,56 +87,55 @@ class SteelInefficiencyDetector:
             absolute_gap = None
             inefficiency_score = None
             recommended_direction = "NO_TRADE"
-            status = None
-            is_inefficient = False
             
             if actual_change is not None:
                 residual_gap = expected_change - actual_change
                 absolute_gap = abs(residual_gap)
                 inefficiency_score = absolute_gap * coverage_ratio
-                
+            
+            # 8. Classify target state
+            status = self._classify(expected_change, actual_change, absolute_gap, coverage_ratio)
+            
+            is_inefficient = status in ("DIVERGENCE", "NON_REACTION", "UNDERREACTION", "OVERREACTION")
+            
+            if is_inefficient:
+                inefficiencies_found += 1
                 if residual_gap > 0:
                     recommended_direction = "LONG_TARGET"
                 elif residual_gap < 0:
                     recommended_direction = "SHORT_TARGET"
                 else:
                     recommended_direction = "NO_TRADE"
-            
-            # 8. Detection status rules in exact order
-            if actual_change is None:
-                status = "INSUFFICIENT_DATA"
-                is_inefficient = False
-                recommended_direction = "NO_TRADE"
-                insufficient_data_targets += 1
-            elif coverage_ratio < self.min_coverage_ratio:
-                status = "LOW_COVERAGE"
-                is_inefficient = False
-                recommended_direction = "NO_TRADE"
-            elif abs(expected_change) < self.min_expected_move:
-                status = "LOW_PRESSURE"
-                is_inefficient = False
-                recommended_direction = "NO_TRADE"
-            elif absolute_gap < self.gap_threshold:
-                status = "EFFICIENT"
-                is_inefficient = False
-                recommended_direction = "NO_TRADE"
-            elif (expected_change > 0 and actual_change < 0) or (expected_change < 0 and actual_change > 0):
-                status = "DIVERGENCE"
-                is_inefficient = True
-            elif abs(actual_change) <= self.non_reaction_threshold:
-                status = "NON_REACTION"
-                is_inefficient = True
-            elif abs(actual_change) < abs(expected_change):
-                status = "UNDERREACTION"
-                is_inefficient = True
             else:
-                status = "OVERREACTION"
-                is_inefficient = True
+                recommended_direction = "NO_TRADE"
                 
-            if is_inefficient:
-                inefficiencies_found += 1
+            if status == "INSUFFICIENT_DATA":
+                insufficient_data_targets += 1
+            
+            # 9. Dynamic explanation generation
+            explanations = {
+                "DIVERGENCE": "Steel moved in the opposite direction to the movement implied by its drivers.",
+                "OVERREACTION": "Steel moved materially beyond the movement implied by its drivers.",
+                "EFFICIENT": "Actual steel movement was sufficiently close to the expected movement.",
+                "LOW_COVERAGE": "Too few registered drivers were available to evaluate the target reliably.",
+                "LOW_PRESSURE": "Expected driver pressure was too small to classify as an inefficiency.",
+                "INSUFFICIENT_DATA": "Actual target movement was not provided."
+            }
+            
+            if status == "UNDERREACTION":
+                if expected_change > 0:
+                    explanation = "Expected positive movement was materially larger than the actual positive movement."
+                else:
+                    explanation = "Expected negative movement was materially larger in magnitude than the actual negative movement."
+            elif status == "NON_REACTION":
+                if expected_change > 0:
+                    explanation = "Steel showed little or no upward reaction despite meaningful positive driver pressure."
+                else:
+                    explanation = "Steel showed little or no downward reaction despite meaningful negative driver pressure."
+            else:
+                explanation = explanations[status]
                 
-            # Rounding
+            # Rounding helper
             def rnd(val):
                 return round(float(val), 6) if val is not None else None
             
@@ -125,24 +146,17 @@ class SteelInefficiencyDetector:
                     "source": c["source"],
                     "change": rnd(c["change"]),
                     "weight": rnd(c["weight"]),
+                    "relationship_direction": c["relationship_direction"],
+                    "direction_multiplier": rnd(c["direction_multiplier"]),
                     "contribution": rnd(c["contribution"])
                 })
-                
-            explanations = {
-                "UNDERREACTION": "Expected positive movement was materially larger than the actual positive movement.",
-                "NON_REACTION": "Steel showed little or no reaction despite meaningful expected pressure.",
-                "DIVERGENCE": "Steel moved in the opposite direction to the movement implied by its drivers.",
-                "OVERREACTION": "Steel moved materially beyond the movement implied by its drivers.",
-                "EFFICIENT": "Actual steel movement was sufficiently close to the expected movement.",
-                "LOW_COVERAGE": "Too few registered drivers were available to evaluate the target reliably.",
-                "LOW_PRESSURE": "Expected driver pressure was too small to classify as an inefficiency.",
-                "INSUFFICIENT_DATA": "Actual target movement was not provided."
-            }
             
             result_targets[target] = {
                 "target": target,
                 "raw_pressure_score": rnd(raw_pressure_score),
                 "expected_change": rnd(expected_change),
+                "expected_change_basis": "weighted_average_directional_driver_change_proxy",
+                "is_historically_calibrated": False,
                 "actual_change": rnd(actual_change),
                 "residual_gap": rnd(residual_gap),
                 "absolute_gap": rnd(absolute_gap),
@@ -154,7 +168,7 @@ class SteelInefficiencyDetector:
                 "is_inefficient": is_inefficient,
                 "recommended_direction": recommended_direction,
                 "contributors": contributors_formatted,
-                "explanation": explanations[status]
+                "explanation": explanation
             }
             
         summary = {

@@ -44,9 +44,20 @@ def main():
     assert future_res["pressure_score"] > 0, f"Assertion failed: STEEL_FUTURE pressure_score is {future_res['pressure_score']} (expected > 0)"
     assert plate_res["pressure_score"] > 0, f"Assertion failed: STEEL_PHYSICAL_PLATE pressure_score is {plate_res['pressure_score']} (expected > 0)"
     
+    # Check new target-level fields
+    assert future_res["applied_weight"] == 0.65, f"Expected applied_weight 0.65, got {future_res['applied_weight']}"
+    assert future_res["skipped_mixed_weight"] == 0.05, f"Expected skipped_mixed_weight 0.05, got {future_res['skipped_mixed_weight']}"
+    assert "GOLD" in future_res["skipped_sources"], "Expected GOLD in skipped_sources"
+    
     assert len(future_res["contributors"]) > 0, "Assertion failed: STEEL_FUTURE contributors list is empty"
     assert len(plate_res["contributors"]) > 0, "Assertion failed: STEEL_PHYSICAL_PLATE contributors list is empty"
     
+    # Check contributor fields
+    for contrib in future_res["contributors"]:
+        assert "relationship_direction" in contrib, "Missing relationship_direction in contributor"
+        assert "direction_multiplier" in contrib, "Missing direction_multiplier in contributor"
+        assert contrib["relationship_direction"] in ("positive", "negative"), "Invalid relationship direction"
+        
     # Check that sorting is descending by absolute contribution
     contribs_future = future_res["contributors"]
     for i in range(len(contribs_future) - 1):
