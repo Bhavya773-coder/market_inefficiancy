@@ -465,7 +465,183 @@ def main():
         
         print("Verified that original source dictionaries remain identical after every call.")
 
-    print("\nAll SteelEpisodeDatasetWriter and Reader assertions passed.")
+        # -------------------------------------------------------------------------
+        # SCENARIO 15 — Dataset and contributor validation hardening
+        # -------------------------------------------------------------------------
+        print("\nScenario 15: Dataset and contributor validation hardening")
+        
+        # 6. Dataset startup rejects duplicate episode IDs
+        tmp_dup_path = pathlib.Path(tmpdir) / "startup_duplicate.jsonl"
+        with open(tmp_dup_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(first_record) + "\n")
+            f.write(json.dumps(first_record) + "\n")
+        try:
+            SteelEpisodeDatasetWriter(dataset_path=str(tmp_dup_path))
+            assert False, "Duplicate episode ID did not raise ValueError during startup scan"
+        except ValueError as e:
+            assert "Duplicate episode ID" in str(e)
+            print("Verified: Duplicate episode ID on startup scan correctly rejected.")
+
+        # 7. Dataset startup rejects an active episode record
+        tmp_active_path = pathlib.Path(tmpdir) / "startup_active.jsonl"
+        active_record = copy.deepcopy(first_record)
+        active_record["episode"]["is_open"] = True
+        with open(tmp_active_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(active_record) + "\n")
+        try:
+            SteelEpisodeDatasetWriter(dataset_path=str(tmp_active_path))
+            assert False, "Active episode did not raise ValueError during startup scan"
+        except ValueError as e:
+            assert "is_open must be False" in str(e)
+            print("Verified: Active episode on startup scan correctly rejected.")
+
+        # 8. Dataset startup rejects outcome OPEN
+        tmp_open_outcome_path = pathlib.Path(tmpdir) / "startup_open_outcome.jsonl"
+        open_outcome_record = copy.deepcopy(first_record)
+        open_outcome_record["episode"]["outcome"] = "OPEN"
+        with open(tmp_open_outcome_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(open_outcome_record) + "\n")
+        try:
+            SteelEpisodeDatasetWriter(dataset_path=str(tmp_open_outcome_path))
+            assert False, "Outcome OPEN did not raise ValueError during startup scan"
+        except ValueError as e:
+            assert "outcome must be one of" in str(e)
+            print("Verified: Outcome OPEN on startup scan correctly rejected.")
+
+        # 9. Dataset startup rejects unsupported schema version
+        tmp_schema_path = pathlib.Path(tmpdir) / "startup_schema.jsonl"
+        bad_schema_record = copy.deepcopy(first_record)
+        bad_schema_record["schema_version"] = "2.0"
+        with open(tmp_schema_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(bad_schema_record) + "\n")
+        try:
+            SteelEpisodeDatasetWriter(dataset_path=str(tmp_schema_path))
+            assert False, "Unsupported schema version did not raise ValueError during startup scan"
+        except ValueError as e:
+            assert "schema_version" in str(e)
+            print("Verified: Unsupported schema version correctly rejected.")
+
+        # 10. Dataset startup rejects incorrect record_type
+        tmp_type_path = pathlib.Path(tmpdir) / "startup_type.jsonl"
+        bad_type_record = copy.deepcopy(first_record)
+        bad_type_record["record_type"] = "bad_record_type"
+        with open(tmp_type_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(bad_type_record) + "\n")
+        try:
+            SteelEpisodeDatasetWriter(dataset_path=str(tmp_type_path))
+            assert False, "Incorrect record_type did not raise ValueError during startup scan"
+        except ValueError as e:
+            assert "record_type" in str(e)
+            print("Verified: Incorrect record_type correctly rejected.")
+
+        # 11. Writer uses real isinstance tracker validation
+        class SpoofedTracker:
+            pass
+        
+        spoof = SpoofedTracker()
+        try:
+            writer.write_new_closed_episodes(spoof)
+            assert False, "Spoofed tracker was not rejected"
+        except TypeError as e:
+            assert "tracker must be a SteelInefficiencyEpisodeTracker" in str(e)
+            print("Verified: Spoofed tracker correctly rejected with TypeError.")
+
+        # 12. episode_ids() is sorted
+        tmp_sort_path = pathlib.Path(tmpdir) / "test_sort.jsonl"
+        writer_sort = SteelEpisodeDatasetWriter(dataset_path=str(tmp_sort_path))
+        
+        ep_z = copy.deepcopy(test_ep_s14)
+        ep_z.episode_id = "z_episode_id"
+        ep_a = copy.deepcopy(test_ep_s14)
+        ep_a.episode_id = "a_episode_id"
+        
+        writer_sort.write_episode(ep_z)
+        writer_sort.write_episode(ep_a)
+        
+        sorted_ids = writer_sort.episode_ids()
+        assert sorted_ids == ["a_episode_id", "z_episode_id"]
+        print("Verified: episode_ids() is sorted alphabetically.")
+
+        # 13. Contributor source validation
+        try:
+            bad_res = copy.deepcopy(target_res_base)
+            bad_res["contributors"] = [{
+                "change": 1.0,
+                "weight": 0.2,
+                "relationship_direction": "positive",
+                "direction_multiplier": 1.0,
+                "contribution": 0.2
+            }]
+            SteelInefficiencyEpisode.from_detection(bad_res, t1)
+            assert False, "Missing source key did not raise KeyError"
+        except KeyError:
+            pass
+            
+        try:
+            bad_res = copy.deepcopy(target_res_base)
+            bad_res["contributors"] = [{
+                "source": "",
+                "change": 1.0,
+                "weight": 0.2,
+                "relationship_direction": "positive",
+                "direction_multiplier": 1.0,
+                "contribution": 0.2
+            }]
+            SteelInefficiencyEpisode.from_detection(bad_res, t1)
+            assert False, "Empty source did not raise ValueError"
+        except ValueError as e:
+            assert "source" in str(e)
+            pass
+        print("Verified: Contributor source validation behaves correctly.")
+
+        # 14. Contributor relationship-direction validation
+        try:
+            bad_res = copy.deepcopy(target_res_base)
+            bad_res["contributors"] = [{
+                "source": "IRON_ORE",
+                "change": 1.0,
+                "weight": 0.2,
+                "direction_multiplier": 1.0,
+                "contribution": 0.2
+            }]
+            SteelInefficiencyEpisode.from_detection(bad_res, t1)
+            assert False, "Missing relationship_direction key did not raise KeyError"
+        except KeyError:
+            pass
+            
+        try:
+            bad_res = copy.deepcopy(target_res_base)
+            bad_res["contributors"] = [{
+                "source": "IRON_ORE",
+                "change": 1.0,
+                "weight": 0.2,
+                "relationship_direction": "neutral",
+                "direction_multiplier": 1.0,
+                "contribution": 0.2
+            }]
+            SteelInefficiencyEpisode.from_detection(bad_res, t1)
+            assert False, "Invalid relationship_direction did not raise ValueError"
+        except ValueError as e:
+            assert "relationship_direction" in str(e)
+            pass
+        print("Verified: Contributor relationship_direction validation behaves correctly.")
+
+        # 15. json.dumps rejects NaN using allow_nan=False
+        nan_ep = copy.deepcopy(test_ep_s14)
+        nan_ep.episode_id = "new_unique_nan_episode_id"
+        nan_ep.opening_expected_change = float("nan")
+        try:
+            writer.write_episode(nan_ep)
+            assert False, "allow_nan=False did not raise ValueError when serializing NaN"
+        except ValueError as e:
+            print(f"Verified: json.dumps rejects NaN with allow_nan=False: {e}")
+
+        # 16. record_count remains correct after writer restart
+        writer_restart_test = SteelEpisodeDatasetWriter(dataset_path=str(tmp_sort_path))
+        assert writer_restart_test.record_count() == 2
+        print("Verified: record_count remains correct after writer restart.")
+
+    print("\nAll steel tracker and dataset integrity assertions passed.")
 
 if __name__ == "__main__":
     main()

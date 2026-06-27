@@ -31,9 +31,17 @@ class SteelInefficiencyEpisodeTracker:
         active_ep = self._active_by_target.get(target)
         if active_ep is None:
             raise ValueError(f"No active episode to manually close for target: {target}")
+            
+        if not isinstance(closed_at, datetime) or closed_at.tzinfo is None or closed_at.tzinfo.utcoffset(closed_at) is None:
+            raise ValueError("closed_at must be a timezone-aware datetime")
+            
+        if self.last_updated_at is not None and closed_at < self.last_updated_at:
+            raise ValueError("closed_at cannot be earlier than tracker's last_updated_at")
+            
         active_ep.close("MANUALLY_CLOSED", closed_at)
         self._active_by_target.pop(target)
         self._closed_episodes.append(active_ep)
+        self.last_updated_at = closed_at
 
     def snapshot(self) -> Dict[str, Any]:
         return {
@@ -95,7 +103,11 @@ class SteelInefficiencyEpisodeTracker:
                     closed_this_step.append(active_ep)
                     continue
 
-                # 2. Convergence
+                # 2. Uncertain data
+                if target_result.get("status") in ("INSUFFICIENT_DATA", "LOW_COVERAGE"):
+                    continue
+
+                # 3. Convergence
                 abs_gap = target_result.get("absolute_gap")
                 is_converged = (target_result.get("status") == "EFFICIENT") or (abs_gap is not None and abs_gap <= self.convergence_gap_threshold)
                 if is_converged:
@@ -105,7 +117,7 @@ class SteelInefficiencyEpisodeTracker:
                     closed_this_step.append(active_ep)
                     continue
 
-                # 3. Signal decay
+                # 4. Signal decay
                 if target_result.get("status") == "LOW_PRESSURE":
                     active_ep.close("SIGNAL_DECAYED", observed_at)
                     self._active_by_target.pop(target)
@@ -113,7 +125,7 @@ class SteelInefficiencyEpisodeTracker:
                     closed_this_step.append(active_ep)
                     continue
 
-                # 4. Direction reversal
+                # 5. Direction reversal
                 is_ineff = target_result.get("is_inefficient")
                 rec_dir = target_result.get("recommended_direction")
                 if is_ineff and rec_dir in ("LONG_TARGET", "SHORT_TARGET") and rec_dir != active_ep.recommended_direction:

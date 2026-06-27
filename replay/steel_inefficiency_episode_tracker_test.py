@@ -518,6 +518,123 @@ def main():
     assert summary["decayed_count"] == 1
     assert summary["active_count"] == 0
     assert summary["closed_count"] == 4
+
+    # -------------------------------------------------------------------------
+    # SCENARIO 15 — Uncertain status and chronology tests
+    # -------------------------------------------------------------------------
+    print("\nScenario 15: Uncertain status and chronology tests")
+    
+    t_start = datetime(2026, 1, 9, 9, 0, 0, tzinfo=timezone.utc)
+    t_update1 = t_start + timedelta(minutes=5)
+    
+    tracker_test1 = SteelInefficiencyEpisodeTracker(convergence_gap_threshold=0.35)
+    res_open = {
+        "targets": {
+            "STEEL_FUTURE": {
+                "target": "STEEL_FUTURE",
+                "recommended_direction": "LONG_TARGET",
+                "is_inefficient": True,
+                "status": "UNDERREACTION",
+                "expected_change": 2.0,
+                "actual_change": 0.5,
+                "residual_gap": 1.5,
+                "absolute_gap": 1.5,
+                "inefficiency_score": 1.5,
+                "coverage_ratio": 1.0
+            }
+        },
+        "summary": {}
+    }
+    tracker_test1.process(res_open, t_start)
+    active_ep = tracker_test1.active_for("STEEL_FUTURE")
+    assert active_ep is not None
+    assert active_ep.is_open is True
+    
+    # 1. LOW_COVERAGE with small absolute gap does not converge, increments uncertain_update_count
+    res_low_cov = {
+        "targets": {
+            "STEEL_FUTURE": {
+                "target": "STEEL_FUTURE",
+                "recommended_direction": "LONG_TARGET",
+                "is_inefficient": True,
+                "status": "LOW_COVERAGE",
+                "expected_change": 2.0,
+                "actual_change": 1.9,
+                "residual_gap": 0.1,
+                "absolute_gap": 0.1,
+                "inefficiency_score": 0.1,
+                "coverage_ratio": 0.2
+            }
+        },
+        "summary": {}
+    }
+    tracker_test1.process(res_low_cov, t_update1)
+    
+    active_ep2 = tracker_test1.active_for("STEEL_FUTURE")
+    assert active_ep2 is not None
+    assert active_ep2.is_open is True
+    assert active_ep2.uncertain_update_count == 1
+    assert len(tracker_test1.closed_episodes()) == 0
+    print("LOW_COVERAGE with small absolute gap verified (episode remains open).")
+    
+    # 2. INSUFFICIENT_DATA does not close
+    t_update2 = t_update1 + timedelta(minutes=5)
+    res_insuf = {
+        "targets": {
+            "STEEL_FUTURE": {
+                "target": "STEEL_FUTURE",
+                "recommended_direction": "LONG_TARGET",
+                "is_inefficient": True,
+                "status": "INSUFFICIENT_DATA",
+                "expected_change": 2.0,
+                "actual_change": 1.9,
+                "residual_gap": 0.1,
+                "absolute_gap": 0.1,
+                "inefficiency_score": 0.1,
+                "coverage_ratio": 0.0
+            }
+        },
+        "summary": {}
+    }
+    tracker_test1.process(res_insuf, t_update2)
+    
+    active_ep3 = tracker_test1.active_for("STEEL_FUTURE")
+    assert active_ep3 is not None
+    assert active_ep3.is_open is True
+    assert active_ep3.uncertain_update_count == 2
+    assert len(tracker_test1.closed_episodes()) == 0
+    print("INSUFFICIENT_DATA verified (episode remains open).")
+    
+    # 3. Expiry can still close an episode during uncertain data
+    tracker_expire = SteelInefficiencyEpisodeTracker(max_episode_age_seconds=600)
+    tracker_expire.process(res_open, t_start)
+    t_expire = t_start + timedelta(minutes=12)
+    tracker_expire.process(res_low_cov, t_expire)
+    
+    assert tracker_expire.active_for("STEEL_FUTURE") is None
+    closed_list = tracker_expire.closed_episodes()
+    assert len(closed_list) == 1
+    assert closed_list[0].outcome == "EXPIRED"
+    print("Expiry during uncertain data verified.")
+
+    # 4. Manual close updates tracker.last_updated_at
+    tracker_manual = SteelInefficiencyEpisodeTracker()
+    tracker_manual.process(res_open, t_start)
+    assert tracker_manual.last_updated_at == t_start
+    
+    t_manual_close = t_start + timedelta(minutes=10)
+    tracker_manual.manually_close("STEEL_FUTURE", t_manual_close)
+    assert tracker_manual.last_updated_at == t_manual_close
+    print("Manual close updates tracker.last_updated_at verified.")
+    
+    # 5. Out-of-order processing after manual close is rejected
+    t_out_of_order = t_manual_close - timedelta(minutes=2)
+    try:
+        tracker_manual.process(res_open, t_out_of_order)
+        assert False, "Out-of-order process after manual close was not rejected"
+    except ValueError:
+        pass
+    print("Out-of-order process after manual close rejected verified.")
     
     print("\nAll SteelInefficiencyEpisode and Tracker assertions passed.")
 

@@ -44,6 +44,18 @@ def _validate_target_result(target_result: Dict[str, Any], observed_at: datetime
             if not isinstance(c, dict):
                 raise TypeError("Each contributor must be a dictionary")
             
+            # Source validation
+            if "source" not in c:
+                raise KeyError("Contributor missing 'source' key")
+            if not isinstance(c["source"], str) or not c["source"]:
+                raise ValueError("Contributor 'source' must be a non-empty string")
+                
+            # Relationship direction validation
+            if "relationship_direction" not in c:
+                raise KeyError("Contributor missing 'relationship_direction' key")
+            if c["relationship_direction"] not in ("positive", "negative"):
+                raise ValueError(f"Contributor 'relationship_direction' must be 'positive' or 'negative', got: {c.get('relationship_direction')}")
+
             # Numeric fields to validate
             contrib_numeric_keys = ["change", "weight", "direction_multiplier", "contribution"]
             for key in contrib_numeric_keys:

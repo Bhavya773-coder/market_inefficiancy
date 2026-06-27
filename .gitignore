@@ -8,7 +8,10 @@ venv/
 *.jsonl
 
 logs/
-storage/
+storage/*.jsonl
+storage/*.jsonl.tmp
+storage/*.lock
+storage/**pycache**/
 
 *.bak
 *.bak2
