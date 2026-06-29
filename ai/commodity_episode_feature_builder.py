@@ -45,7 +45,7 @@ class CommodityEpisodeFeatureBuilder:
         if episode.get("schema_version") != "1.0":
             raise ValueError(f"Unsupported episode schema_version: {episode.get('schema_version')}")
             
-        expected_type = f"{self.profile.commodity.lower()}_inefficiency_episode"
+        expected_type = self.profile.episode_type
         if episode.get("episode_type") != expected_type:
             raise ValueError(f"Unsupported episode_type: {episode.get('episode_type')} (expected {expected_type})")
         

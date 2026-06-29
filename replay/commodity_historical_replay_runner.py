@@ -9,7 +9,6 @@ from typing import List, Dict, Any, Optional
 from ai.commodity_replay_config import CommodityReplayConfig
 from ai.point_in_time_price_store import PointInTimePriceStore
 from ai.commodity_episode_feature_builder import CommodityEpisodeFeatureBuilder
-from ai.commodity_feature_profile import STEEL_FEATURE_PROFILE
 
 class CommodityHistoricalReplayRunner:
     """
@@ -32,9 +31,15 @@ class CommodityHistoricalReplayRunner:
         self.episode_writer = episode_writer
         self.feature_writer = feature_writer
 
+        from ai.commodity_feature_profile import STEEL_FEATURE_PROFILE, GOLD_FEATURE_PROFILE
+        
         # Configure feature builder based on commodity
-        if config.commodity == "STEEL":
-            self.feature_builder = CommodityEpisodeFeatureBuilder(STEEL_FEATURE_PROFILE)
+        profiles = {
+            "STEEL": STEEL_FEATURE_PROFILE,
+            "GOLD": GOLD_FEATURE_PROFILE
+        }
+        if config.commodity in profiles:
+            self.feature_builder = CommodityEpisodeFeatureBuilder(profiles[config.commodity])
         else:
             raise ValueError(f"Unsupported commodity profile: {config.commodity}")
 

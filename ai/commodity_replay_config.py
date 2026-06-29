@@ -130,3 +130,58 @@ STEEL_HISTORICAL_REPLAY_CONFIG = CommodityReplayConfig(
     strict_chronology=True,
     finalize_open_episodes="LEAVE_OPEN"
 )
+
+# Predefined gold historical replay configuration
+GOLD_HISTORICAL_REPLAY_CONFIG = CommodityReplayConfig(
+    commodity="GOLD",
+    target_instruments=("GOLD_GLOBAL", "GOLD_INR", "GOLD_FUTURE"),
+    driver_instruments=(
+        "DXY", "USDINR", "US_REAL_YIELD", "US_NOMINAL_YIELD", "INFLATION_EXPECTATION",
+        "SILVER", "CRUDE_OIL", "VIX", "SP500", "GOLD_ETF_FLOW",
+        "CENTRAL_BANK_BUYING", "GLOBAL_LIQUIDITY"
+    ),
+    lookback_seconds_by_instrument={
+        "GOLD_GLOBAL": 86400.0,
+        "GOLD_INR": 86400.0,
+        "GOLD_FUTURE": 3600.0,
+        "DXY": 86400.0,
+        "USDINR": 86400.0,
+        "US_REAL_YIELD": 86400.0,
+        "US_NOMINAL_YIELD": 86400.0,
+        "INFLATION_EXPECTATION": 86400.0,
+        "SILVER": 86400.0,
+        "CRUDE_OIL": 86400.0,
+        "VIX": 86400.0,
+        "SP500": 86400.0,
+        "GOLD_ETF_FLOW": 86400.0,
+        "CENTRAL_BANK_BUYING": 86400.0,
+        "GLOBAL_LIQUIDITY": 86400.0
+    },
+    maximum_data_age_seconds_by_instrument={
+        "GOLD_GLOBAL": 172800.0,
+        "GOLD_INR": 172800.0,
+        "GOLD_FUTURE": 172800.0,
+        "DXY": 172800.0,
+        "USDINR": 172800.0,
+        "US_REAL_YIELD": 172800.0,
+        "US_NOMINAL_YIELD": 172800.0,
+        "INFLATION_EXPECTATION": 172800.0,
+        "SILVER": 172800.0,
+        "CRUDE_OIL": 172800.0,
+        "VIX": 172800.0,
+        "SP500": 172800.0,
+        "GOLD_ETF_FLOW": 172800.0,
+        "CENTRAL_BANK_BUYING": 172800.0,
+        "GLOBAL_LIQUIDITY": 172800.0
+    },
+    decision_instruments=("GOLD_GLOBAL", "GOLD_INR", "GOLD_FUTURE"),
+    minimum_required_driver_count=5,
+    episode_max_age_seconds=172800.0,
+    convergence_gap_threshold=0.75,
+    output_episode_dataset_path="storage/test_gold_replay_episodes.jsonl",
+    output_feature_dataset_path="storage/test_gold_replay_features.jsonl",
+    replay_run_id="gold-default-replay-id",
+    strict_chronology=True,
+    finalize_open_episodes="LEAVE_OPEN"
+)
+
