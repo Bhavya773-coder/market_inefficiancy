@@ -22,7 +22,10 @@ class CommodityHistoricalReplayRunner:
         adapter: Any,
         episode_tracker: Any,
         episode_writer: Any,
-        feature_writer: Any
+        feature_writer: Any,
+        feature_builder: Optional[Any] = None,
+        episode_serializer: Optional[Any] = None,
+        commodity_profile: Optional[Any] = None
     ):
         self.records = records
         self.config = config
@@ -31,17 +34,23 @@ class CommodityHistoricalReplayRunner:
         self.episode_writer = episode_writer
         self.feature_writer = feature_writer
 
-        from ai.commodity_feature_profile import STEEL_FEATURE_PROFILE, GOLD_FEATURE_PROFILE
-        
-        # Configure feature builder based on commodity
-        profiles = {
-            "STEEL": STEEL_FEATURE_PROFILE,
-            "GOLD": GOLD_FEATURE_PROFILE
-        }
-        if config.commodity in profiles:
-            self.feature_builder = CommodityEpisodeFeatureBuilder(profiles[config.commodity])
+        # Handle episode serializer
+        self.episode_serializer = episode_serializer if episode_serializer is not None else (lambda ep: ep.to_dict())
+
+        # Handle feature builder
+        if feature_builder is not None:
+            self.feature_builder = feature_builder
+        elif commodity_profile is not None:
+            self.feature_builder = CommodityEpisodeFeatureBuilder(commodity_profile)
         else:
-            raise ValueError(f"Unsupported commodity profile: {config.commodity}")
+            # Dynamic fallback to maintain backward compatibility
+            import ai.commodity_feature_profile as cfp
+            profile_name = f"{config.commodity}_FEATURE_PROFILE"
+            if hasattr(cfp, profile_name):
+                profile = getattr(cfp, profile_name)
+                self.feature_builder = CommodityEpisodeFeatureBuilder(profile)
+            else:
+                raise ValueError(f"Unsupported commodity profile: {config.commodity}")
 
         # Inject deterministic episode_id_factory into tracker
         def episode_id_factory(target: str, recommended_direction: str, observed_at: datetime) -> str:
@@ -129,7 +138,7 @@ class CommodityHistoricalReplayRunner:
                             outcome_counts[ep.outcome] = outcome_counts.get(ep.outcome, 0) + 1
                             
                             # Build and write features
-                            ep_dict = ep.to_dict()
+                            ep_dict = self.episode_serializer(ep)
                             built_feat = self.feature_builder.build(ep_dict)
                             res_feat = self.feature_writer.write_example(built_feat)
                             if res_feat["written"]:
@@ -163,7 +172,7 @@ class CommodityHistoricalReplayRunner:
                         written_episode_count += 1
                         outcome_counts[ep.outcome] = outcome_counts.get(ep.outcome, 0) + 1
                         
-                        ep_dict = ep.to_dict()
+                        ep_dict = self.episode_serializer(ep)
                         built_feat = self.feature_builder.build(ep_dict)
                         res_feat = self.feature_writer.write_example(built_feat)
                         if res_feat["written"]:
