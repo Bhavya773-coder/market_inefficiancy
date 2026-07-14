@@ -104,5 +104,15 @@ except urllib.error.HTTPError as e:
 print("HTTP round trip (/, /api/state, 404): OK")
 
 server.shutdown()
+
+# 5. BUG HUNT (Item 7): empty/missing session dir (data gap) must render a
+#    truthful NO DATA state, not crash.
+empty_state = DashboardState("storage/does_not_exist_session").build()
+assert empty_state["health"]["session_feed"] == "NO DATA"
+assert empty_state["quotes"] == {}
+assert empty_state["positions"] == []
+assert empty_state["counters"]["entries"] == 0
+print("empty session dir (data gap): OK")
+
 shutil.rmtree(SESSION, ignore_errors=True)
 print("\nALL DASHBOARD SERVER TESTS PASSED")
