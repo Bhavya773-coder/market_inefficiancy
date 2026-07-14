@@ -31,16 +31,24 @@ OPPORTUNITY FRAMEWORK
 
 INEFFICIENCY ENGINE
 
-[PARTIAL] Cross Market Board
-[PARTIAL] Cost Engine
-[PARTIAL] Settlement Logic
-[PARTIAL] Capital Return Ranking
+[PARTIAL] Cross Market Board (static example markets)
+[WORKING] Cost Engine (inefficiency/round_trip_cost_engine.py)
+[WORKING] Settlement Engine (inefficiency/settlement_engine.py)
+[WORKING] Capital Engine (inefficiency/capital_engine.py)
+[WORKING] Liquidity Engine (inefficiency/liquidity_engine.py)
+[WORKING] Opportunity Ranking (inefficiency/opportunity_ranking_engine.py)
 
 ----------------------------------------
 
 MARKET CONNECTORS
 
-[PARTIAL] Mock Steel Connector
+[WORKING] Dhan/NSE Connector (connectors/dhan_connector.py — hardened:
+          retries, backoff, rate-limit spacing, logging, standard
+          NEXT_BUILD.md quote shape; live-verified only up to auth,
+          current .env token expired 2026-06-09)
+[WORKING] Crypto Connector (connectors/crypto_connector.py —
+          Crypto.com public API, live-verified 2026-07-14, read-only)
+[PARTIAL] Mock Steel Connector (random synthetic prices — dev only)
 
 ----------------------------------------
 
@@ -54,14 +62,11 @@ REPORTING
 
 PLANNED
 
-[ ] NSE Connector
-[ ] MCX Connector
-[ ] LME Connector
-[ ] COMEX Connector
-[ ] Forex Connector
-[ ] Crypto Connector
+[ ] MCX Connector (no data access yet)
+[ ] LME Connector (no data access yet)
+[ ] COMEX Connector (no data access yet)
+[ ] Forex Connector (no data access yet)
 
-[ ] Liquidity Engine
 [ ] Inventory Engine
 [ ] Delivery Engine
 
@@ -149,11 +154,14 @@ and executable arbitrage opportunities
 
 PROJECT STATUS
 
-Trading Brain: ~80%
+Trading Brain: ~80% (execution/PnL still simulated with random fills)
 
-Inefficiency Platform: ~25%
+Inefficiency Platform: ~55% (all five Phase 2 engines built and tested;
+not yet fed by real cross-market data)
 
-Steel Arbitrage Platform: ~15%
+Steel Arbitrage Platform: ~20% (detection logic real and tested; data
+sources are NSE-ETF proxies and mock prices, not steel markets)
 
 Current Focus:
-Build real market connectors and executable inefficiency detection.
+Real cross-market data sources and wiring Phase 2 engines into live
+detection. See PROJECT_HEALTH_REPORT.md for the full audit.
