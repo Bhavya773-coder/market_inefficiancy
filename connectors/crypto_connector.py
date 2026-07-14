@@ -52,11 +52,25 @@ class CryptoConnector:
         self.request_timeout_seconds = request_timeout_seconds
         self._sleep = sleep_fn
         self._last_request_monotonic = None
+        # One pooled session for the connector's lifetime. Without this,
+        # every request opened a fresh TCP+TLS connection; sustained polling
+        # accumulated socket churn until new connections started failing
+        # (observed live 2026-07-14: every call ConnectionError after ~8 min).
+        self._session = requests.Session()
 
     def _default_http_get(self, url, params):
-        response = requests.get(url, params=params, timeout=self.request_timeout_seconds)
+        response = self._session.get(url, params=params, timeout=self.request_timeout_seconds)
         response.raise_for_status()
         return response.json()
+
+    def reset_session(self):
+        """Drops and recreates the pooled HTTP session (recovery hook)."""
+        try:
+            self._session.close()
+        except Exception:
+            pass
+        self._session = requests.Session()
+        logger.info("crypto connector HTTP session reset")
 
     def _respect_rate_limit(self):
         if self._last_request_monotonic is None:
@@ -119,26 +133,27 @@ class CryptoConnector:
         quotes = []
         errors = []
 
-        for instrument_name in instrument_names:
-            try:
-                payload = self._call_with_retries(
-                    f"get_tickers({instrument_name})",
-                    CRYPTO_COM_TICKER_URL,
-                    {"instrument_name": instrument_name}
-                )
-            except CryptoConnectorError as e:
-                errors.append({"instrument_name": instrument_name, "error": str(e)})
-                continue
+        # One batch call: the endpoint returns ALL tickers when no
+        # instrument_name is given. This keeps sustained polling at one
+        # HTTP request per poll instead of one per instrument.
+        payload = self._call_with_retries(
+            f"get_tickers(batch x{len(instrument_names)})",
+            CRYPTO_COM_TICKER_URL,
+            None
+        )
+        data = payload.get("result", {}).get("data", [])
+        tickers_by_name = {
+            t.get("i"): t for t in data if isinstance(t, dict)
+        }
 
-            data = payload.get("result", {}).get("data", [])
-            if not data or not isinstance(data[0], dict):
+        for instrument_name in instrument_names:
+            ticker = tickers_by_name.get(instrument_name)
+            if ticker is None:
                 errors.append({
                     "instrument_name": instrument_name,
-                    "error": "empty ticker data in response"
+                    "error": "instrument missing from batch ticker response"
                 })
                 continue
-
-            ticker = data[0]
             try:
                 last_price = float(ticker["a"]) if ticker.get("a") is not None else None
                 bid = float(ticker["b"]) if ticker.get("b") is not None else None

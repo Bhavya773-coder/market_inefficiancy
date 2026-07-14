@@ -63,7 +63,11 @@ class CryptoPaperTradingRunner:
         if len(self.instruments) < 2:
             raise ValueError("need at least 2 instruments for lag detection")
 
-        self.connector = connector if connector is not None else CryptoConnector()
+        # max_retries=1: the poll loop itself repeats every few seconds, so
+        # long in-call retry chains only starve the cadence (observed
+        # 2026-07-14: 4-attempt chains x 5 instruments wedged the session).
+        self.connector = connector if connector is not None else CryptoConnector(max_retries=1)
+        self.consecutive_poll_failures = 0
 
         self.change_detector = PriceChangeDetector()
         self.lag_detector = LagDetector()
@@ -129,13 +133,28 @@ class CryptoPaperTradingRunner:
         observed_at = datetime.now(timezone.utc)
         try:
             result = self.connector.get_standard_quotes(self.instruments)
+            self.consecutive_poll_failures = 0
         except (CryptoConnectorError, ValueError) as e:
             self.stats["poll_errors"] += 1
+            self.consecutive_poll_failures += 1
             self._log(self.detection_log, {
                 "timestamp": observed_at.isoformat(),
                 "type": "poll_error",
+                "consecutive": self.consecutive_poll_failures,
                 "error": str(e)[:300]
             })
+            # Recovery: after 3 consecutive failed polls, drop the pooled
+            # HTTP session so the next poll starts on fresh connections.
+            if (
+                self.consecutive_poll_failures % 3 == 0
+                and hasattr(self.connector, "reset_session")
+            ):
+                self.connector.reset_session()
+                self._log(self.detection_log, {
+                    "timestamp": observed_at.isoformat(),
+                    "type": "session_reset",
+                    "after_consecutive_failures": self.consecutive_poll_failures
+                })
             return {}
 
         events = {}

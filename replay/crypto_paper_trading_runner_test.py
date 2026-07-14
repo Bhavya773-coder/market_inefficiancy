@@ -120,19 +120,31 @@ detections = [json.loads(line) for line in open(out / "detections.jsonl")]
 assert any(d["type"] == "lag_signal" for d in detections)
 print("JSONL artifacts verified: OK")
 
-# 6. Poll errors are absorbed, not fatal
+# 6. Poll errors are absorbed, not fatal — and REGRESSION (2026-07-14):
+#    after 3 consecutive failed polls the runner resets the connector's
+#    HTTP session to recover from wedged connections.
 class BrokenConnector:
+    def __init__(self):
+        self.resets = 0
+
     def get_standard_quotes(self, instruments):
         raise __import__("connectors.crypto_connector", fromlist=["CryptoConnectorError"]).CryptoConnectorError("simulated outage")
+
+    def reset_session(self):
+        self.resets += 1
 
 
 shutil.rmtree("storage/test_crypto_runner_err", ignore_errors=True)
 args2 = argparse.Namespace(**{**vars(args), "output_dir": "storage/test_crypto_runner_err"})
-runner2 = CryptoPaperTradingRunner(args2, connector=BrokenConnector())
-events = runner2.poll_quotes()
-assert events == {} and runner2.stats["poll_errors"] == 1
+broken = BrokenConnector()
+runner2 = CryptoPaperTradingRunner(args2, connector=broken)
+for _ in range(3):
+    events = runner2.poll_quotes()
+    assert events == {}
+assert runner2.stats["poll_errors"] == 3
+assert broken.resets == 1, "session must reset after 3 consecutive poll failures"
 runner2.close()
-print("poll error absorbed: OK")
+print("poll error absorbed + session reset recovery: OK")
 
 shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 shutil.rmtree("storage/test_crypto_runner_err", ignore_errors=True)
