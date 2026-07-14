@@ -7,6 +7,7 @@ import requests
 logger = logging.getLogger("connectors.crypto")
 
 CRYPTO_COM_TICKER_URL = "https://api.crypto.com/exchange/v1/public/get-tickers"
+CRYPTO_COM_CANDLESTICK_URL = "https://api.crypto.com/exchange/v1/public/get-candlestick"
 
 
 class CryptoConnectorError(Exception):
@@ -206,3 +207,45 @@ class CryptoConnector:
             "quotes": quotes,
             "errors": errors
         }
+
+    def get_candlesticks(self, instrument_name, timeframe="1m", count=300):
+        """
+        Fetches historical OHLCV candles (real exchange data, public
+        endpoint). Returns a list of dicts sorted by time ascending:
+            {"timestamp_ms": int, "open": float, "high": float,
+             "low": float, "close": float, "volume": float}
+        """
+        if not instrument_name:
+            raise ValueError("instrument_name is required")
+        if count <= 0:
+            raise ValueError("count must be > 0")
+
+        payload = self._call_with_retries(
+            f"get_candlestick({instrument_name},{timeframe})",
+            CRYPTO_COM_CANDLESTICK_URL,
+            {"instrument_name": instrument_name, "timeframe": timeframe, "count": count}
+        )
+
+        data = payload.get("result", {}).get("data", [])
+        candles = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            try:
+                candles.append({
+                    "timestamp_ms": int(row["t"]),
+                    "open": float(row["o"]),
+                    "high": float(row["h"]),
+                    "low": float(row["l"]),
+                    "close": float(row["c"]),
+                    "volume": float(row["v"])
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        if not candles:
+            raise CryptoConnectorError(
+                f"No usable candles for {instrument_name} ({timeframe})"
+            )
+        candles.sort(key=lambda c: c["timestamp_ms"])
+        return candles
