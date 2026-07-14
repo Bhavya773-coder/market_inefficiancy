@@ -143,6 +143,20 @@ try:
 except CryptoConnectorError:
     print("empty batch raises: OK")
 
+# 8b. BUG HUNT (Item 7): malformed / out-of-range quotes are rejected at
+#     the connector boundary, never passed to trading layers.
+for bad_ticker, label in [
+    (ticker(last="-5.0"), "negative last"),
+    (ticker(last="0"), "zero last"),
+    (ticker(last="nan"), "NaN last"),
+    (ticker(bid="-1.0"), "negative bid"),
+]:
+    connector = make_connector([batch_payload([bad_ticker, ticker("ETH_USDT", "1780")])])
+    result = connector.get_standard_quotes(["BTC_USDT", "ETH_USDT"])
+    assert all(q["asset"] != "BTC_USDT" for q in result["quotes"]), label
+    assert any(e["instrument_name"] == "BTC_USDT" for e in result["errors"]), label
+print("malformed quote rejection: OK")
+
 # 9. Empty instrument list is an explicit error
 try:
     make_connector([]).get_standard_quotes([])

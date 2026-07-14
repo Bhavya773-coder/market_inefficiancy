@@ -167,10 +167,17 @@ class CryptoConnector:
                 })
                 continue
 
-            if last_price is None:
+            # Reject malformed market data at the boundary: a non-positive
+            # or NaN price must never reach detection/trading layers.
+            if (
+                last_price is None
+                or not (last_price > 0)  # False for NaN too
+                or (bid is not None and not (bid > 0))
+                or (ask is not None and not (ask > 0))
+            ):
                 errors.append({
                     "instrument_name": instrument_name,
-                    "error": "no last price in ticker"
+                    "error": f"out-of-range ticker prices (last={last_price}, bid={bid}, ask={ask})"
                 })
                 continue
 

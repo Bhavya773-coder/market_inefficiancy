@@ -90,6 +90,18 @@ cash_after = runner.paper_engine.account_state()["cash"]
 assert cash_before == cash_after, "blocked gate must prevent all entries"
 print("gate verdict decides entries: OK")
 
+# 5b. BUG HUNT (Item 7): Redis dying MID-SESSION must degrade gracefully,
+#     not crash the pipeline (constructor-time absence is already handled).
+class DyingRedis:
+    def set(self, *args, **kwargs):
+        raise ConnectionError("redis died mid-session")
+
+
+runner.opportunity_gate = LiveOpportunityGate()  # restore real gate
+runner.r_client = DyingRedis()
+runner.execute_pipeline(datetime.now(timezone.utc), tick_count=4)  # must not raise
+print("redis death mid-session: OK (graceful degradation)")
+
 # 6. Clean shutdown flushes logs
 runner.close()
 out = pathlib.Path(OUTPUT_DIR)

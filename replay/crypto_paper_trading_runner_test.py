@@ -116,6 +116,11 @@ summary = next(t for t in trades if t["type"] == "session_summary")
 assert summary["stats"]["entries"] == 1
 quotes = [json.loads(line) for line in open(out / "quotes.jsonl")]
 assert len(quotes) == 3
+# REGRESSION: quote log must carry data_source — the dashboard's
+# REAL vs SIMULATED honesty tagging reads it.
+for record in quotes:
+    for q in record["quotes"].values():
+        assert q.get("data_source") == "crypto_com_live", q
 detections = [json.loads(line) for line in open(out / "detections.jsonl")]
 assert any(d["type"] == "lag_signal" for d in detections)
 print("JSONL artifacts verified: OK")

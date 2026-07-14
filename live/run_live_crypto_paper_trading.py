@@ -168,7 +168,10 @@ class CryptoPaperTradingRunner:
             "timestamp": observed_at.isoformat(),
             "quotes": {s: {
                 "last_price": q["last_price"], "bid": q["bid"], "ask": q["ask"],
-                "timestamp": q["timestamp"]
+                "timestamp": q["timestamp"],
+                # data_source is what the dashboard's REAL/SIMULATED honesty
+                # tagging reads — never drop it from the log.
+                "data_source": q["data_source"]
             } for s, q in self.latest_quotes.items()},
             "errors": result.get("errors", [])
         })
