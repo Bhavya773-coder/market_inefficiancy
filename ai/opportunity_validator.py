@@ -60,6 +60,14 @@ class OpportunityValidator:
                 "opportunity": opp_dict
             }
 
+        # Skip lag-specific checks for commodity inefficiency opportunity types
+        if opp_dict.get("opportunity_type") == "commodity_inefficiency":
+            return {
+                "is_valid": True,
+                "reason": "valid_opportunity",
+                "opportunity": opp_dict
+            }
+
         # 5. Check metadata["is_lagging"] is True
         if metadata.get("is_lagging") is not True:
             return {
