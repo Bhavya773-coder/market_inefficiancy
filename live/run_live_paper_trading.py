@@ -133,8 +133,10 @@ class LivePaperTradingRunner:
             max_quote_age_seconds=args.max_quote_age_seconds,
             max_pair_gap_seconds=args.max_pair_gap_seconds
         )
-        self.freshness_validator = QuoteFreshnessValidator(max_age_seconds=args.max_quote_age_seconds)
-        self.sync_monitor = QuoteSynchronizationMonitor(max_gap_seconds=args.max_pair_gap_seconds)
+        # QuoteFreshnessValidator takes limits per call, not at construction;
+        # QuoteSynchronizationMonitor is configured by consecutive-check count.
+        self.freshness_validator = QuoteFreshnessValidator()
+        self.sync_monitor = QuoteSynchronizationMonitor()
 
         # Initialize Adapters
         self.steel_adapter = SteelLiveQuoteAdapter(STEEL_HISTORICAL_REPLAY_CONFIG)
@@ -419,7 +421,7 @@ class LivePaperTradingRunner:
         # Write closed episodes and features to live datasets
         for ep in self.steel_tracker.closed_episodes():
             if not self.steel_episode_writer.contains(ep.episode_id):
-                res = self.steel_episode_writer.write(ep)
+                res = self.steel_episode_writer.write_episode(ep)
                 if res.get("written"):
                     ep_dict = ep.to_dict()
                     built_feat = self.steel_feature_builder.build(ep_dict)
@@ -427,7 +429,7 @@ class LivePaperTradingRunner:
 
         for ep in self.gold_tracker.closed_episodes():
             if not self.gold_episode_writer.contains(ep.episode_id):
-                res = self.gold_episode_writer.write(ep)
+                res = self.gold_episode_writer.write_episode(ep)
                 if res.get("written"):
                     ep_dict = ep.to_dict()
                     built_feat = self.gold_feature_builder.build(ep_dict)
