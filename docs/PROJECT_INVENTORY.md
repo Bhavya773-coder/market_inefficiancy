@@ -37,6 +37,11 @@ INEFFICIENCY ENGINE
 [WORKING] Capital Engine (inefficiency/capital_engine.py)
 [WORKING] Liquidity Engine (inefficiency/liquidity_engine.py)
 [WORKING] Opportunity Ranking (inefficiency/opportunity_ranking_engine.py)
+[WORKING] Live Opportunity Gate (ai/live_opportunity_gate.py — WIRED into
+          both live runners; the ranking engine decides every entry)
+[WORKING] Batch/GPU Opportunity Scorer (inefficiency/batch_opportunity_scorer.py
+          — numpy + cupy backends, parity-tested vs scalar engine;
+          GPU 43.4M candidates/s columnar on RTX 4050, 2026-07-14)
 
 ----------------------------------------
 
@@ -47,8 +52,25 @@ MARKET CONNECTORS
           NEXT_BUILD.md quote shape; live-verified only up to auth,
           current .env token expired 2026-06-09)
 [WORKING] Crypto Connector (connectors/crypto_connector.py —
-          Crypto.com public API, live-verified 2026-07-14, read-only)
+          Crypto.com public API, live-verified 2026-07-14, read-only;
+          pooled session, single-call batch tickers, historical
+          candlesticks, out-of-range quote rejection)
 [PARTIAL] Mock Steel Connector (random synthetic prices — dev only)
+
+LIVE RUNNERS / OPERATIONS
+
+[WORKING] Crypto Paper Trading Runner (live/run_live_crypto_paper_trading.py
+          — 35-min clean live session 2026-07-14: 2130 quotes, 222 lag
+          signals, 3 gated entries, 207 blocked, 0 errors)
+[WORKING] NSE Paper Trading Runner (live/run_live_paper_trading.py —
+          gated by ranking engine; awaiting fresh Dhan token for live use)
+[WORKING] Preflight Watchdog (scripts/preflight_check.py — token/market/
+          redis/network/engine checks, adversarially tested)
+[WORKING] Live Dashboard (live/dashboard_server.py — single-page view,
+          REAL vs SIMULATED tagging, verified live against crypto feed)
+[WORKING] Crypto Lag Calibrator (ai/crypto_lag_calibrator.py — on real
+          data it DECLINED to calibrate: 0/20 pairs qualify; all
+          is_historically_calibrated flags remain False)
 
 ----------------------------------------
 
@@ -156,12 +178,16 @@ PROJECT STATUS
 
 Trading Brain: ~80% (execution/PnL still simulated with random fills)
 
-Inefficiency Platform: ~55% (all five Phase 2 engines built and tested;
-not yet fed by real cross-market data)
+Inefficiency Platform: ~70% (all five Phase 2 engines built, tested AND
+wired into both live runners; proven end-to-end on live crypto data
+2026-07-14; NSE end-to-end blocked only by expired Dhan token)
 
 Steel Arbitrage Platform: ~20% (detection logic real and tested; data
 sources are NSE-ETF proxies and mock prices, not steel markets)
 
+Detection Edge: NOT VALIDATED (crypto lag calibration on real data:
+0/20 pairs qualify; all is_historically_calibrated flags are False)
+
 Current Focus:
-Real cross-market data sources and wiring Phase 2 engines into live
-detection. See PROJECT_HEALTH_REPORT.md for the full audit.
+Refresh Dhan token, run preflight, first live NSE gated session.
+See MVP_READINESS_REPORT.md for the demo-readiness audit.

@@ -5,6 +5,42 @@ Session window: ~12:45–14:00 IST, NSE market open (9:15–15:30 IST)
 Auditor: Claude (AI developer session)
 Branch: feature/live-paper-trading
 
+----------------------------------------
+
+## ADDENDUM — evening session 2026-07-14 (~16:40–19:00 IST)
+
+Scorecard deltas vs the morning audit below (evidence in
+MVP_READINESS_REPORT.md; final regression 36/36 PASS):
+
+- Learning/execution brain: 45 → 45 (unchanged; random-fill brain
+  untouched by design).
+- Live data pipeline reliability: 55 → 78. The crypto pipeline ran a
+  clean sustained 35-minute LIVE session (2,130 quotes, 0 errors) after
+  a real connection-churn bug was found live, root-caused, fixed and
+  regression-tested. Dhan-side still token-blocked (external).
+- Inefficiency/cost modeling correctness: 75 → 85. The Phase 2 engines
+  are now WIRED into both live runners via ai/live_opportunity_gate.py;
+  wiring proven by test (old gate approves a 0.15% edge, ranking engine
+  rejects it, outcome follows the ranking engine). Added parity-tested
+  batch scorer with GPU backend (43.4M candidates/s columnar, RTX 4050).
+- Real-market opportunity detection: 15 → 35 for measurement (real
+  numbers now exist: 222 signals, 207 gate-blocked, 3 entries, −18.23
+  MTM on 1M over 35 live minutes) — but edge validation FAILED
+  honestly: calibration on real candles found 0/20 pairs where lag
+  events beat costs; all is_historically_calibrated flags remain False.
+- Test coverage and quality: 70 → 82. 29 → 36 suites; the live runner,
+  preflight, dashboard, calibrator and scorer are all under asserting
+  tests; adversarial cases (bad token, holiday clock, Redis death
+  mid-session, malformed quotes, data gaps) covered.
+- Overall next-phase readiness: 55 → 72. New: preflight watchdog
+  (scripts/preflight_check.py) and live dashboard
+  (live/dashboard_server.py) with REAL/SIMULATED honesty tagging,
+  verified live in a browser against the crypto feed.
+
+Unchanged truths: Dhan token expired (user action), steel/gold have no
+real data source, MCX/LME/COMEX/Forex not built, Redis brain unrunnable
+here. The original morning audit follows unedited.
+
 Every claim below traces to a command executed in this session and output
 actually observed. Nothing in this report is extrapolated from file names
 or documentation.
