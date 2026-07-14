@@ -99,6 +99,20 @@ class LiveOpportunityGate:
         else:
             available_qty = cfg["default_available_quantity"]
 
+        # Prefer the instrument's real bid/ask spread when the quote
+        # carries one (e.g. crypto standard quotes); otherwise fall back
+        # to the configured default.
+        spread_pct = cfg["default_spread_pct"]
+        bid = quote.get("bid")
+        ask = quote.get("ask")
+        if (
+            isinstance(bid, (int, float)) and isinstance(ask, (int, float))
+            and ask >= bid > 0
+        ):
+            mid = (bid + ask) / 2.0
+            if mid > 0:
+                spread_pct = ((ask - bid) / mid) * 100.0
+
         quantity = cfg["desired_quantity"]
         gross_buy_value = price * quantity
 
@@ -121,8 +135,8 @@ class LiveOpportunityGate:
             "max_acceptable_lockup_days": cfg["max_acceptable_lockup_days"],
             "buy_side_available_quantity": available_qty,
             "sell_side_available_quantity": available_qty,
-            "buy_spread_pct": cfg["default_spread_pct"],
-            "sell_spread_pct": cfg["default_spread_pct"],
+            "buy_spread_pct": spread_pct,
+            "sell_spread_pct": spread_pct,
             "max_participation_rate": cfg["max_participation_rate"],
             "slippage_pct_at_full_participation": cfg["slippage_pct_at_full_participation"],
             "min_fill_ratio": cfg["min_fill_ratio"],
