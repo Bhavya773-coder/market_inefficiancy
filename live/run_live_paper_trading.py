@@ -44,6 +44,7 @@ from ai.opportunity import Opportunity
 from ai.opportunity_validator import OpportunityValidator
 from ai.paper_trade_candidate_factory import PaperTradeCandidateFactory
 from ai.paper_trading_engine import PaperTradingEngine
+from ai.live_opportunity_gate import LiveOpportunityGate
 
 # Writers
 from storage.steel_episode_dataset_writer import SteelEpisodeDatasetWriter
@@ -168,6 +169,8 @@ class LivePaperTradingRunner:
         self.opportunity_validator = OpportunityValidator()
         self.candidate_factory = PaperTradeCandidateFactory()
         self.paper_engine = PaperTradingEngine()
+        # Phase 2 gate: cost + settlement + capital + liquidity decide entries
+        self.opportunity_gate = LiveOpportunityGate()
 
         # Load Instrument Mappings
         self.dhan_map = DEFAULT_DHAN_INSTRUMENT_MAP.copy()
@@ -492,28 +495,53 @@ class LivePaperTradingRunner:
                         # Create PaperTradeCandidate
                         candidate = self.candidate_factory.from_validated_opportunity(val_res)
                         if candidate:
-                            # Map candidate direction for simulator entry validation (BUY_ALLOWED requires net_edge > 0)
-                            # We write the direction to metadata and set direction to long equivalent for paper simulator
-                            candidate.suggested_direction = "BUY_ALLOWED"
-                            
                             # Get latest price
                             latest_quote = quotes_snap.get(f"{self.dhan_map[target_name]['exchange']}:{self.dhan_map[target_name]['security_id']}")
                             if latest_quote:
                                 price = latest_quote["last_price"]
-                                
-                                # Send to Paper Engine
-                                entry_report = self.paper_engine.process_candidate(candidate, quantity=1, price=price)
-                                
-                                # Log filled entries
-                                exec_data = entry_report.get("execution")
-                                if exec_data and exec_data.get("status") == "filled":
+
+                                # Phase 2 gate decides: cost + settlement +
+                                # capital + liquidity via the ranking engine.
+                                gate_result = self.opportunity_gate.evaluate_target(
+                                    target_name,
+                                    target_res,
+                                    action,
+                                    latest_quote,
+                                    available_capital=self.paper_engine.account_state()["cash"]
+                                )
+
+                                if gate_result["allowed"]:
+                                    entry_report = self.paper_engine.process_gated_candidate(
+                                        candidate, gate_result, price
+                                    )
+
+                                    # Log filled entries
+                                    exec_data = entry_report.get("execution")
+                                    if exec_data and exec_data.get("status") == "filled":
+                                        self.trade_log.write(json.dumps({
+                                            "timestamp": observed_at.isoformat(),
+                                            "type": "entry",
+                                            "symbol": target_name,
+                                            "price": price,
+                                            "quantity": gate_result["quantity"],
+                                            "gate_evaluation": {
+                                                "annualized_return_pct": gate_result["evaluation"]["annualized_return_pct"],
+                                                "net_profit_pct": gate_result["evaluation"]["net_profit_pct"],
+                                                "liquidity_score": gate_result["evaluation"]["liquidity_score"],
+                                                "rank_score": gate_result["evaluation"]["rank_score"]
+                                            },
+                                            "execution": exec_data,
+                                            "account": self.paper_engine.account_state()
+                                        }, sort_keys=True) + "\n")
+                                        self.trade_log.flush()
+                                else:
+                                    # Log blocked opportunities with reasons
                                     self.trade_log.write(json.dumps({
                                         "timestamp": observed_at.isoformat(),
-                                        "type": "entry",
+                                        "type": "blocked",
                                         "symbol": target_name,
                                         "price": price,
-                                        "execution": exec_data,
-                                        "account": self.paper_engine.account_state()
+                                        "rejection_reasons": gate_result["rejection_reasons"]
                                     }, sort_keys=True) + "\n")
                                     self.trade_log.flush()
 
