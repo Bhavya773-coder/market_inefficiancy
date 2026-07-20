@@ -11,7 +11,7 @@ import pathlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>F&O Inefficiencies — PAPER</title>
+<html><head><meta charset="utf-8"><title>Inefficiencies — PAPER</title>
 <style>
  body{background:#0d1117;color:#c9d1d9;font-family:Consolas,monospace;padding:16px}
  h1{font-size:16px} table{border-collapse:collapse;width:100%;font-size:12px}
@@ -19,7 +19,7 @@ HTML = """<!DOCTYPE html>
  th{color:#8b949e} .y{color:#3fb950}.n{color:#8b949e}
  #pnl{margin-top:14px;font-size:15px;font-weight:bold}
 </style></head><body>
-<h1>CAUGHT INEFFICIENCIES (paper only)</h1>
+<h1>CAUGHT INEFFICIENCIES — stocks, F&O, commodities (paper only)</h1>
 <table id="t"><tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Direction</th>
 <th>Net edge %</th><th>Net profit INR</th><th>Executable</th></tr></table>
 <div id="pnl"></div>
