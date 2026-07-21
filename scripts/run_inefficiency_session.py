@@ -206,7 +206,10 @@ def main():
     mcx_universe = load_mcx_universe()
     print(f"F&O underlyings: {list(fno_universe)}")
     print(f"MCX commodities: {list(mcx_universe)}")
-    connector = DhanConnector()
+    # ponytail: Dhan's quote endpoint throttles well below our default
+    # per-request spacing when 4 batch calls fire back-to-back each poll;
+    # 1.1s keeps every call comfortably under 1 req/sec.
+    connector = DhanConnector(min_request_interval_seconds=1.1)
 
     if args.watch:
         watch(connector, fno_universe, mcx_universe, args.output_dir, args.poll_interval)
