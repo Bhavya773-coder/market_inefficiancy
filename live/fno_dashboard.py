@@ -20,16 +20,16 @@ HTML = """<!DOCTYPE html>
  #pnl{margin-top:14px;font-size:15px;font-weight:bold}
 </style></head><body>
 <h1>CAUGHT INEFFICIENCIES — stocks, F&O, commodities (paper only)</h1>
-<table id="t"><tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Action (Buy/Sell)</th>
+<table id="t"><tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Action (Buy/Sell)</th>
 <th>Net edge %</th><th>Net profit INR</th><th>Executable</th></tr></table>
 <div id="pnl"></div>
 <script>
 async function tick(){
  const s = await (await fetch('/api/state')).json();
  document.getElementById('t').innerHTML =
-  '<tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Action (Buy/Sell)</th><th>Net edge %</th><th>Net profit INR</th><th>Executable</th></tr>' +
+  '<tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Action (Buy/Sell)</th><th>Net edge %</th><th>Net profit INR</th><th>Executable</th></tr>' +
   s.rows.map(r=>'<tr><td>'+r.timestamp.slice(11,19)+'</td><td>'+r.asset+'</td><td>'+r.strategy+
-   '</td><td>'+(r.action||r.direction)+'</td><td>'+r.net_profit_pct.toFixed(4)+'</td><td>'+r.net_profit.toFixed(2)+
+   '</td><td>'+r.direction+'</td><td>'+(r.action||r.direction)+'</td><td>'+r.net_profit_pct.toFixed(4)+'</td><td>'+r.net_profit.toFixed(2)+
    '</td><td class="'+(r.is_executable?'y':'n')+'">'+(r.is_executable?'YES':r.rejection_reasons.join(','))+'</td></tr>').join('');
  document.getElementById('pnl').textContent =
   'Paper P&L at close (locked-in captures): ' + (s.total_pnl===null?'session still running — '+s.captures+' captures so far, running total '+s.running_pnl.toFixed(2)+' INR':s.total_pnl.toFixed(2)+' INR ('+s.captures+' captures)');
