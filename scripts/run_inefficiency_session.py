@@ -101,10 +101,30 @@ def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine
 
 # ---------- normalize every source into one row shape ----------
 
+# What to literally buy/sell for each strategy+direction pair. Reuses the
+# same direction labels the detectors already compute -- no new logic.
+ACTION_TEMPLATES = {
+    ("futures_basis", "CASH_AND_CARRY"): "BUY SPOT / SELL FUTURE",
+    ("futures_basis", "REVERSE_CASH_AND_CARRY"): "SELL SPOT / BUY FUTURE",
+    ("put_call_parity", "CONVERSION"): "BUY SPOT + BUY PUT / SELL CALL",
+    ("put_call_parity", "REVERSAL"): "SELL SPOT + SELL PUT / BUY CALL",
+    ("mcx_calendar", "CASH_AND_CARRY"): "BUY NEAR MONTH / SELL FAR MONTH",
+    ("mcx_calendar", "REVERSE_CASH_AND_CARRY"): "SELL NEAR MONTH / BUY FAR MONTH",
+}
+
+
+def action_text(strategy, direction):
+    if strategy == "nse_bse_arb":
+        buy_mkt, sell_mkt = direction.split("->")
+        return f"BUY @ {buy_mkt} / SELL @ {sell_mkt}"
+    return ACTION_TEMPLATES.get((strategy, direction), direction)
+
+
 def _row(ts, opp_id, asset, strategy, direction, ev):
     return {
         "timestamp": ts, "opportunity_id": opp_id, "asset": asset,
         "strategy": strategy, "direction": direction,
+        "action": action_text(strategy, direction),
         "net_profit": ev["net_profit"], "net_profit_pct": ev["net_profit_pct"],
         "annualized_return_pct": ev.get("annualized_return_pct", 0.0),
         "is_executable": ev["is_executable"], "rejection_reasons": ev["rejection_reasons"],

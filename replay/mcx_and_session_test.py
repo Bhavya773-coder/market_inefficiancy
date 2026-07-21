@@ -60,9 +60,17 @@ mcx = detect_mcx(universe, quotes)
 rows = collect_rows("2026-07-20T11:00:00", nse_bse, fno, mcx)
 strategies = {r["strategy"] for r in rows}
 assert strategies == {"nse_bse_arb", "futures_basis", "mcx_calendar"}, strategies
-assert all({"timestamp", "asset", "strategy", "direction", "net_profit",
+assert all({"timestamp", "asset", "strategy", "direction", "action", "net_profit",
             "net_profit_pct", "is_executable", "rejection_reasons"} <= set(r) for r in rows)
 assert next(r for r in rows if r["asset"] == "RELIANCE")["direction"] == "NSE->BSE"
-print("unified rows:", [(r["asset"], r["strategy"]) for r in rows])
+
+# action must literally say buy/sell, not a raw enum
+reliance = next(r for r in rows if r["asset"] == "RELIANCE")
+assert reliance["action"] == "BUY @ NSE / SELL @ BSE"
+tcs = next(r for r in rows if r["asset"] == "TCS")
+assert tcs["action"] == "BUY SPOT / SELL FUTURE"
+gold = next(r for r in rows if r["asset"] == "GOLD")
+assert gold["action"] in ("BUY NEAR MONTH / SELL FAR MONTH", "SELL NEAR MONTH / BUY FAR MONTH")
+print("unified rows:", [(r["asset"], r["strategy"], r["action"]) for r in rows])
 
 print("\nALL MCX + SESSION TESTS PASSED")
