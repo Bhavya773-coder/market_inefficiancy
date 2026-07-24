@@ -19,3 +19,6 @@ storage/**pycache**/
 .DS_Store
 # Dhan security master
 security_id_list.csv
+
+# generated session reports (trading data output, not code)
+*.xlsx
