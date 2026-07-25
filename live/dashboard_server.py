@@ -92,7 +92,10 @@ class DashboardState:
         now = datetime.now(timezone.utc)
         quote_records = self._quote_records()
         trades = _read_jsonl_tail(self.session_dir / "paper_trades.jsonl", 400)
-        detections = _read_jsonl_tail(self.session_dir / "detections.jsonl", 100)
+        # 400: detections now interleave lag_signal, poll_error and the
+        # periodic kronos_forecast records, so a short tail can drop the most
+        # recent forecast for a quiet instrument.
+        detections = _read_jsonl_tail(self.session_dir / "detections.jsonl", 400)
 
         # ---- Quotes (latest tick + sparkline history per symbol) ----
         latest_quotes = {}
@@ -174,7 +177,8 @@ class DashboardState:
                 opportunity_rows.append({
                     "kind": "ENTRY", "symbol": t.get("symbol"), "price": t.get("price"),
                     "quantity": t.get("quantity"),
-                    "reference": t.get("lag_reference"),
+                    "reference": t.get("lag_reference") or (
+                        "kronos" if t.get("source") == "kronos" else None),
                     "gate": t.get("gate_evaluation"),
                     "kronos": t.get("kronos"),
                     "timestamp": t.get("timestamp")
@@ -182,7 +186,8 @@ class DashboardState:
             elif t.get("type") == "blocked":
                 opportunity_rows.append({
                     "kind": "BLOCKED", "symbol": t.get("symbol"), "price": t.get("price"),
-                    "reference": t.get("lag_reference"),
+                    "reference": t.get("lag_reference") or (
+                        "kronos" if t.get("source") == "kronos" else None),
                     "rejection_reasons": t.get("rejection_reasons"),
                     "kronos": t.get("kronos"),
                     "timestamp": t.get("timestamp")
@@ -198,21 +203,61 @@ class DashboardState:
         # ---- Kronos filter telemetry ----
         # Read-only: whatever the runner already logged. The dashboard never
         # runs the model itself, so it cannot slow the trading loop down.
-        kronos_rows = [t for t in trades if t.get("kronos")]
+        # Decisions come from paper_trades (Kronos consulted at entry time);
+        # the live per-instrument view comes from the runner's periodic
+        # kronos_forecast telemetry in detections.
+        # Filter consultations only: Kronos-originated rows are counted
+        # separately as led_entries/below_cost_floor, and lumping them in here
+        # made the "at entry" badge read wildly higher than actual lag entries.
+        kronos_rows = [t for t in trades
+                       if t.get("kronos") and t.get("source") != "kronos"]
         kronos_blocks = [t for t in trades
                          if t.get("type") == "blocked"
                          and "kronos_forecast_disagrees" in (t.get("rejection_reasons") or [])]
         latest_kronos = {}
+        charts = {}
+        for d in detections:
+            if d.get("type") == "kronos_forecast" and d.get("symbol") and d.get("kronos"):
+                k = d["kronos"]
+                latest_kronos[d["symbol"]] = {
+                    "up": k.get("up"), "move_pct": k.get("move_pct"),
+                    "horizon": k.get("horizon"), "at": d.get("timestamp"),
+                    "source": "live",
+                }
+                # Chart series: actual candle closes then the forecast path.
+                # Kept separate from latest_kronos so the trade-decision
+                # override below cannot wipe out a symbol's chart.
+                if k.get("context") and k.get("path"):
+                    charts[d["symbol"]] = {
+                        "actual": k["context"],
+                        "predicted": k["path"],
+                        "last_close": k.get("last_close"),
+                        "move_pct": k.get("move_pct"),
+                        "up": k.get("up"),
+                        "at": d.get("timestamp"),
+                        "timeframe_min": 1,
+                    }
+        # Entry-time forecasts still win for a symbol, being tied to a decision.
         for t in trades:
             if t.get("kronos") and t.get("symbol"):
-                latest_kronos[t["symbol"]] = dict(t["kronos"],
-                                                  at=t.get("timestamp"),
-                                                  outcome=t.get("type"))
+                latest_kronos[t["symbol"]] = dict(t["kronos"], at=t.get("timestamp"),
+                                                  source=t.get("type"))
         kronos = {
             "consulted": len(kronos_rows),
             "vetoed_entries": len(kronos_blocks),
             "agreed": sum(1 for t in kronos_rows if t["kronos"].get("up")),
+            # Entries Kronos originated on its own, with no lag event.
+            "led_entries": sum(1 for t in trades if t.get("source") == "kronos"
+                               and t.get("type") == "entry"),
+            "below_cost_floor": sum(
+                1 for t in trades if t.get("source") == "kronos"
+                and t.get("type") == "blocked"
+                and not set(t.get("rejection_reasons") or []) - {
+                    "kronos_move_below_min", "kronos_forecast_down_long_only",
+                    "not_profitable_after_round_trip_costs",
+                    "below_min_annualized_return"}),
             "latest": latest_kronos,
+            "charts": charts,
         }
 
         # ---- Health strip ----
@@ -282,7 +327,18 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,R
 .kpi{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
 .kpi .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .kpi .val{font-size:22px;font-weight:700}
-.grid2{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:start}
+.grid2{display:grid;grid-template-columns:2.2fr 1fr;gap:16px;align-items:start}
+@media(max-width:1250px){.grid2{grid-template-columns:1fr}}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px}
+.chart{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.chart-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.chart-head .s{font-size:14px;font-weight:700}
+.chart-head .p{font-size:13px}
+.chart canvas{width:100%;height:190px;display:block}
+.chart-foot{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:6px}
+.legend{display:flex;gap:16px;align-items:center;font-size:11px;color:var(--muted);margin-bottom:12px;flex-wrap:wrap}
+.legend .sw{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.legend .sw.dash{background:repeating-linear-gradient(90deg,#f5a524 0 4px,transparent 4px 7px)!important}
 .panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px}
 .panel h2{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin:0 0 12px;font-weight:600}
 .tickers{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
@@ -310,9 +366,15 @@ th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase;
   <div class="grid2">
     <div>
       <div class="panel"><h2>Live Quotes (USDT)</h2><div class="tickers" id="tickers"></div></div>
-      <div class="panel"><h2>Kronos Forecast Filter <span id="kstat" class="badge"></span></h2>
-        <div id="kronos-empty" class="dim" style="font-size:12px">No forecasts logged yet — either the filter is off, or no cost-gate-approved signal has needed one. Kronos is only consulted for candidates that already cleared the cost gate.</div>
-        <div class="tickers" id="kronos-cards"></div></div>
+      <div class="panel"><h2>Kronos Forecast Charts <span id="kstat" class="badge"></span></h2>
+        <div class="legend">
+          <span><i class="sw" style="background:#4c8dff"></i>actual price</span>
+          <span><i class="sw dash" style="background:#f5a524"></i>Kronos forecast</span>
+          <span><i class="sw" style="background:#7d8aa3"></i>now divider</span>
+          <span class="dim">forecast horizon 15m &nbsp;·&nbsp; 1m candles</span>
+        </div>
+        <div id="kronos-empty" class="dim" style="font-size:12px">No forecasts logged yet — either the filter is off, or no cost-gate-approved signal has needed one.</div>
+        <div class="charts" id="kronos-charts"></div></div>
       <div class="panel"><h2>Opportunity Flow — ranking-engine verdicts</h2><table id="opps"></table></div>
     </div>
     <div>
@@ -334,6 +396,63 @@ function spark(canvas, arr){
   ctx.beginPath(); ctx.lineWidth=3; ctx.strokeStyle = up ? '#20c997' : '#f0466e';
   arr.forEach((v,i)=>{ const x=i/(arr.length-1)*w, y=h-((v-min)/range)*h*0.8-h*0.1; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
   ctx.stroke();
+}
+
+// Actual price then the Kronos forecast on one shared axis. The forecast is
+// drawn dashed/amber and starts at the last actual point so the join is
+// continuous and a reader can tell prediction from history at a glance.
+function drawForecast(canvas, actual, predicted){
+  const DPR=2, w=canvas.width=canvas.clientWidth*DPR, h=canvas.height=190*DPR;
+  const ctx=canvas.getContext('2d'); ctx.clearRect(0,0,w,h);
+  if(!actual||actual.length<2||!predicted||!predicted.length) return;
+  const padL=58*DPR, padR=10*DPR, padT=12*DPR, padB=20*DPR;
+  const plotW=w-padL-padR, plotH=h-padT-padB;
+  const all=actual.concat(predicted);
+  let min=Math.min(...all), max=Math.max(...all);
+  const pad=((max-min)||Math.abs(max)*0.001||1)*0.12; min-=pad; max+=pad;
+  const n=actual.length+predicted.length;
+  const X=i=>padL+(i/(n-1))*plotW;
+  const Y=v=>padT+plotH-((v-min)/(max-min))*plotH;
+
+  // grid + y labels
+  ctx.strokeStyle='rgba(125,138,163,.18)'; ctx.lineWidth=1*DPR;
+  ctx.fillStyle='#7d8aa3'; ctx.font=(10*DPR)+'px ui-monospace,Consolas,monospace';
+  ctx.textAlign='right'; ctx.textBaseline='middle';
+  for(let g=0;g<=4;g++){
+    const v=min+(max-min)*g/4, y=Y(v);
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(w-padR,y); ctx.stroke();
+    ctx.fillText(v.toLocaleString('en-US',{maximumFractionDigits:v<10?4:2}), padL-6*DPR, y);
+  }
+
+  // actual
+  ctx.beginPath(); ctx.lineWidth=2.2*DPR; ctx.strokeStyle='#4c8dff'; ctx.setLineDash([]);
+  actual.forEach((v,i)=>{ i?ctx.lineTo(X(i),Y(v)):ctx.moveTo(X(i),Y(v)); });
+  ctx.stroke();
+
+  // "now" divider at the hand-off point
+  const jx=X(actual.length-1);
+  ctx.beginPath(); ctx.setLineDash([3*DPR,3*DPR]); ctx.lineWidth=1.4*DPR;
+  ctx.strokeStyle='rgba(125,138,163,.55)';
+  ctx.moveTo(jx,padT); ctx.lineTo(jx,padT+plotH); ctx.stroke();
+  ctx.setLineDash([]); ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillStyle='#7d8aa3'; ctx.fillText('now', jx+4*DPR, padT+2*DPR);
+
+  // forecast, continuous from the last actual point
+  const up=predicted[predicted.length-1]>=actual[actual.length-1];
+  const fc=up?'#20c997':'#f0466e';
+  ctx.beginPath(); ctx.setLineDash([6*DPR,4*DPR]); ctx.lineWidth=2.4*DPR;
+  ctx.strokeStyle='#f5a524';
+  ctx.moveTo(jx,Y(actual[actual.length-1]));
+  predicted.forEach((v,i)=>ctx.lineTo(X(actual.length+i),Y(v)));
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // shade the forecast region so it reads as "not yet real"
+  ctx.fillStyle='rgba(245,165,36,.07)';
+  ctx.fillRect(jx,padT,padL+plotW-jx,plotH);
+
+  // endpoint marker, coloured by predicted direction
+  const ex=X(n-1), ey=Y(predicted[predicted.length-1]);
+  ctx.beginPath(); ctx.fillStyle=fc; ctx.arc(ex,ey,3.6*DPR,0,Math.PI*2); ctx.fill();
 }
 async function tick(){
  let s; try{ s = await (await fetch('/api/state')).json(); }catch(e){ document.getElementById('meta').textContent='state fetch failed: '+e; return; }
@@ -370,16 +489,39 @@ async function tick(){
  });
 
  const k=s.kronos||{consulted:0,latest:{}};
- document.getElementById('kstat').innerHTML = k.consulted
-   ? '<span class="badge live">'+k.consulted+' consulted</span> &nbsp;<span class="badge blocked">'+k.vetoed_entries+' vetoed</span> &nbsp;<span class="dim" style="font-size:11px">'+k.agreed+' agreed</span>'
-   : '';
- const kEntries=Object.entries(k.latest||{});
- document.getElementById('kronos-empty').style.display = kEntries.length? 'none':'block';
- document.getElementById('kronos-cards').innerHTML = kEntries.map(([sym,v])=>
-   '<div class="ticker"><div class="sym">'+sym+'</div>'+
-   '<div class="px '+(v.up?'pos':'neg')+'">'+(v.up?'▲ UP':'▼ DOWN')+'</div>'+
-   '<div class="dim" style="font-size:11px">'+fmt(v.move_pct,3)+'% / '+v.horizon+'m &nbsp;'+
-   (v.at?String(v.at).slice(11,19):'')+'</div></div>').join('');
+ const kEntries0=Object.entries(k.latest||{});
+ document.getElementById('kstat').innerHTML =
+   (kEntries0.length? '<span class="badge live">'+kEntries0.length+' live</span> ':'')+
+   (k.led_entries? '&nbsp;<span class="badge live">'+k.led_entries+' kronos entries</span>':'')+
+   (k.below_cost_floor? '&nbsp;<span class="badge warn">'+k.below_cost_floor+' below cost floor</span>':'')+
+   (k.consulted? '&nbsp;<span class="badge paper">'+k.consulted+' at entry</span> &nbsp;<span class="badge blocked">'+k.vetoed_entries+' vetoed</span>':'');
+ const charts=Object.entries(k.charts||{});
+ document.getElementById('kronos-empty').style.display = charts.length? 'none':'block';
+ const host=document.getElementById('kronos-charts');
+ // Rebuild only when the symbol set changes, so redrawing every 2s does not
+ // discard canvases (and scroll position) on every tick.
+ const sig=charts.map(([s])=>s).join(',');
+ if(host.dataset.sig!==sig){
+   host.dataset.sig=sig;
+   host.innerHTML=charts.map(([sym])=>
+     '<div class="chart"><div class="chart-head"><span class="s">'+sym+'</span>'+
+     '<span class="p" id="ch-p-'+sym+'"></span></div>'+
+     '<canvas id="ch-'+sym+'"></canvas>'+
+     '<div class="chart-foot"><span id="ch-f1-'+sym+'"></span><span id="ch-f2-'+sym+'"></span></div></div>').join('');
+ }
+ charts.forEach(([sym,c])=>{
+   const cv=document.getElementById('ch-'+sym); if(!cv) return;
+   drawForecast(cv, c.actual, c.predicted);
+   const pred=c.predicted[c.predicted.length-1];
+   document.getElementById('ch-p-'+sym).innerHTML =
+     '<span class="dim">now</span> '+fmt(c.last_close,4)+
+     ' <span class="dim">→</span> <span class="'+(c.up?'pos':'neg')+'">'+fmt(pred,4)+
+     ' ('+(c.up?'+':'')+fmt(c.move_pct,3)+'%)</span>';
+   document.getElementById('ch-f1-'+sym).textContent =
+     c.actual.length+'m actual · '+c.predicted.length+'m forecast';
+   document.getElementById('ch-f2-'+sym).textContent =
+     c.at? 'forecast at '+String(c.at).slice(11,19)+' UTC' : '';
+ });
 
  document.getElementById('opps').innerHTML =
   '<tr><th>Kind</th><th>Symbol</th><th>Ref</th><th>Px</th><th>Kronos</th><th>Engine breakdown / rejection</th><th>At</th></tr>'+

@@ -22,6 +22,17 @@ _CACHE = {}
 _PREDICTOR = None
 
 
+def compact(result):
+    """
+    Scalar-only view of a forecast, for the trade log and Excel export.
+    Drops path/context, which exist for charting and would otherwise bloat
+    every entry/blocked record with ~75 floats.
+    """
+    if not result:
+        return result
+    return {k: result[k] for k in ("up", "move_pct", "horizon") if k in result}
+
+
 def _resolve_device(device):
     """"auto" -> cuda when a GPU is actually usable, else cpu."""
     if device not in (None, "auto"):
@@ -50,10 +61,15 @@ def _predictor(model, tokenizer, device, max_context):
 def direction(connector, symbol, model="NeoQuasar/Kronos-small",
               tokenizer="NeoQuasar/Kronos-Tokenizer-base", device="auto",
               max_context=512, lookback=LOOKBACK, horizon=HORIZON,
-              timeframe="1m", temperature=1.0, top_p=0.9):
+              timeframe="1m", temperature=1.0, top_p=0.9, context_len=60):
     """
-    Forecasts `symbol` and returns {"up": bool, "move_pct": float,
-    "horizon": int} — or None if anything at all goes wrong.
+    Forecasts `symbol` and returns
+        {"up": bool, "move_pct": float, "horizon": int,
+         "path": [predicted closes], "context": [recent actual closes]}
+    or None if anything at all goes wrong.
+
+    path/context are what lets the dashboard draw the forecast against real
+    price on one aligned axis; both are candle closes on `timeframe`.
 
     ponytail: synchronous. ~0.4-0.6s on the RTX 4050 (125MB VRAM), ~3.8s on
     CPU. Well inside the 3s poll cadence on GPU, and callers only ask about
@@ -87,7 +103,12 @@ def direction(connector, symbol, model="NeoQuasar/Kronos-small",
 
         last = float(x["close"].iloc[-1])
         move_pct = (float(pred["close"].iloc[-1]) - last) / last * 100.0
-        result = {"up": move_pct > 0, "move_pct": move_pct, "horizon": horizon}
+        result = {
+            "up": move_pct > 0, "move_pct": move_pct, "horizon": horizon,
+            "path": [float(v) for v in pred["close"].tolist()],
+            "context": [float(v) for v in x["close"].tolist()[-context_len:]],
+            "last_close": last,
+        }
 
         if len(_CACHE) > 64:
             _CACHE.clear()

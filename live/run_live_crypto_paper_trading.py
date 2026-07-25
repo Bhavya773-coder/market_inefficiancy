@@ -35,6 +35,7 @@ from ai.paper_trade_simulator import PaperTradeSimulator
 from ai.paper_trading_account import PaperTradingAccount
 from ai.live_opportunity_gate import LiveOpportunityGate
 from ai.kronos_forecast import direction as kronos_direction
+from ai.kronos_forecast import compact as kronos_compact
 
 DEFAULT_INSTRUMENTS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "LTC_USDT"]
 
@@ -83,6 +84,10 @@ class CryptoPaperTradingRunner:
         )
 
         self.kronos_mode = getattr(args, "kronos_filter", "off")
+        self.kronos_forecast_interval = getattr(args, "kronos_forecast_interval", 120)
+        # -inf so the first tick forecasts immediately rather than waiting out
+        # a full interval with an empty dashboard.
+        self.last_kronos_forecast = float("-inf")
 
         self.previous_events = {}
         self.latest_quotes = {}
@@ -100,7 +105,9 @@ class CryptoPaperTradingRunner:
             "lag_signals": 0,
             "entries": 0,
             "exits": 0,
-            "blocked": 0
+            "blocked": 0,
+            "kronos_entries": 0,
+            "kronos_skipped": 0
         }
 
     # ------------------------------------------------------------------
@@ -273,7 +280,7 @@ class CryptoPaperTradingRunner:
                                 "liquidity_score": gate_result["evaluation"]["liquidity_score"],
                                 "rank_score": gate_result["evaluation"]["rank_score"]
                             },
-                            "kronos": kronos,
+                            "kronos": kronos_compact(kronos),
                             "execution": exec_data,
                             "account": self.paper_engine.account_state()
                         })
@@ -286,7 +293,7 @@ class CryptoPaperTradingRunner:
                         "price": price,
                         "lag_reference": ref_symbol,
                         "rejection_reasons": gate_result["rejection_reasons"],
-                        "kronos": kronos
+                        "kronos": kronos_compact(kronos)
                     })
 
         self.previous_events.update(events)
@@ -317,6 +324,101 @@ class CryptoPaperTradingRunner:
 
     # ------------------------------------------------------------------
 
+    def kronos_scan(self, observed_at):
+        """
+        Forecasts every instrument on a timer, logs it, and — when
+        --kronos-entries is on — treats the forecast itself as a tradeable
+        signal instead of waiting for a lag event.
+
+        The predicted upside is handed to the SAME LiveOpportunityGate the lag
+        path uses, so round-trip costs, spread, liquidity, capital and the
+        minimum annualized return still decide. Nothing here reimplements
+        profitability; a forecast only supplies the expected edge.
+
+        LONG only, deliberately: the paper engine has no short path, and the
+        gate takes abs(gap), so a DOWN forecast would otherwise be approved as
+        a long and trade backwards.
+        """
+        for symbol in self.instruments:
+            forecast = kronos_direction(self.connector, symbol,
+                                        device=self.args.kronos_device)
+            if forecast is None:
+                continue
+            self._log(self.detection_log, {
+                "timestamp": observed_at.isoformat(),
+                "type": "kronos_forecast",
+                "symbol": symbol,
+                "kronos": forecast,
+            })
+
+            if self.args.kronos_entries != "on":
+                continue
+            quote = self.latest_quotes.get(symbol)
+            if not quote:
+                continue
+            if symbol in self.paper_engine.account_state()["positions"]:
+                continue  # no pyramiding, same rule as the lag path
+
+            skip = None
+            if not forecast["up"]:
+                skip = "kronos_forecast_down_long_only"
+            elif forecast["move_pct"] < self.args.kronos_min_move_pct:
+                skip = "kronos_move_below_min"
+            if skip:
+                self.stats["kronos_skipped"] += 1
+                self._log(self.trade_log, {
+                    "timestamp": observed_at.isoformat(),
+                    "type": "blocked", "source": "kronos",
+                    "symbol": symbol, "price": quote["last_price"],
+                    "rejection_reasons": [skip], "kronos": kronos_compact(forecast),
+                })
+                continue
+
+            gate_result = self.opportunity_gate.evaluate_target(
+                symbol,
+                {"target": symbol, "status": "KRONOS_FORECAST",
+                 "is_inefficient": True, "absolute_gap": forecast["move_pct"]},
+                "KEEP_SIGNAL", quote,
+                available_capital=self.paper_engine.account_state()["cash"]
+            )
+            price = quote["last_price"]
+
+            if not gate_result["allowed"]:
+                self.stats["blocked"] += 1
+                self._log(self.trade_log, {
+                    "timestamp": observed_at.isoformat(),
+                    "type": "blocked", "source": "kronos",
+                    "symbol": symbol, "price": price,
+                    "rejection_reasons": gate_result["rejection_reasons"],
+                    "kronos": kronos_compact(forecast),
+                })
+                continue
+
+            entry_report = self.paper_engine.process_gated_candidate(
+                gate_result["candidate"], gate_result, price
+            )
+            exec_data = entry_report.get("execution")
+            if exec_data and exec_data.get("status") == "filled":
+                self.stats["entries"] += 1
+                self.stats["kronos_entries"] += 1
+                evaluation = gate_result["evaluation"]
+                self._log(self.trade_log, {
+                    "timestamp": observed_at.isoformat(),
+                    "type": "entry", "source": "kronos",
+                    "symbol": symbol, "price": price,
+                    "quantity": gate_result["quantity"],
+                    "lag_reference": None,
+                    "gate_evaluation": {
+                        "annualized_return_pct": evaluation["annualized_return_pct"],
+                        "net_profit_pct": evaluation["net_profit_pct"],
+                        "liquidity_score": evaluation["liquidity_score"],
+                        "rank_score": evaluation["rank_score"],
+                    },
+                    "kronos": kronos_compact(forecast),
+                    "execution": exec_data,
+                    "account": self.paper_engine.account_state(),
+                })
+
     def run(self):
         print(f"=== LIVE CRYPTO PAPER TRADING RUNNER (run_id={self.run_id}) ===")
         print(f"Instruments: {self.instruments}")
@@ -334,6 +436,12 @@ class CryptoPaperTradingRunner:
                 if events:
                     self.detect_and_trade(events, observed_at)
                     self.manage_exits(observed_at)
+
+                if (self.kronos_mode != "off" and self.kronos_forecast_interval > 0
+                        and time.perf_counter() - self.last_kronos_forecast
+                        >= self.kronos_forecast_interval):
+                    self.last_kronos_forecast = time.perf_counter()
+                    self.kronos_scan(observed_at)
 
                 if self.stats["ticks"] % 20 == 0:
                     state = self.paper_engine.account_state()
@@ -405,6 +513,19 @@ def main():
                              "on: also skip entries Kronos disagrees with.")
     parser.add_argument("--kronos-device", default="auto",
                         help="auto picks the GPU when available, else CPU")
+    parser.add_argument("--kronos-entries", choices=["off", "on"], default="off",
+                        help="on: treat the Kronos forecast itself as a trade "
+                             "signal (no lag event required). The cost gate "
+                             "still decides; LONG only.")
+    parser.add_argument("--kronos-min-move-pct", type=float, default=0.15,
+                        help="minimum forecast upside to even consult the cost "
+                             "gate. Below ~0.15%% a move cannot cover the "
+                             "0.1%% round-trip fee plus spread.")
+    parser.add_argument("--kronos-forecast-interval", type=float, default=120,
+                        help="seconds between logging a forecast for every "
+                             "instrument, so the dashboard shows live "
+                             "predictions instead of only entry-time ones. "
+                             "0 disables.")
     args = parser.parse_args()
 
     CryptoPaperTradingRunner(args).run()
