@@ -34,6 +34,7 @@ from ai.paper_trading_engine import PaperTradingEngine
 from ai.paper_trade_simulator import PaperTradeSimulator
 from ai.paper_trading_account import PaperTradingAccount
 from ai.live_opportunity_gate import LiveOpportunityGate
+from ai.kronos_forecast import direction as kronos_direction
 
 DEFAULT_INSTRUMENTS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "LTC_USDT"]
 
@@ -80,6 +81,8 @@ class CryptoPaperTradingRunner:
                 account=PaperTradingAccount(starting_cash=args.starting_cash)
             )
         )
+
+        self.kronos_mode = getattr(args, "kronos_filter", "off")
 
         self.previous_events = {}
         self.latest_quotes = {}
@@ -237,7 +240,20 @@ class CryptoPaperTradingRunner:
                 )
 
                 price = quote["last_price"]
-                if gate_result["allowed"]:
+                # Kronos second opinion, only for candidates the cost gate
+                # already cleared (forecasting is ~3-4s; never spend it on a
+                # signal that was going to be rejected anyway).
+                allowed = gate_result["allowed"]
+                kronos = None
+                if self.kronos_mode != "off" and allowed:
+                    kronos = kronos_direction(self.connector, tgt_symbol,
+                                              device=self.args.kronos_device)
+                    if (self.kronos_mode == "on" and kronos is not None
+                            and not kronos["up"]):
+                        allowed = False
+                        gate_result["rejection_reasons"] = ["kronos_forecast_disagrees"]
+
+                if allowed:
                     entry_report = self.paper_engine.process_gated_candidate(
                         candidate, gate_result, price
                     )
@@ -257,6 +273,7 @@ class CryptoPaperTradingRunner:
                                 "liquidity_score": gate_result["evaluation"]["liquidity_score"],
                                 "rank_score": gate_result["evaluation"]["rank_score"]
                             },
+                            "kronos": kronos,
                             "execution": exec_data,
                             "account": self.paper_engine.account_state()
                         })
@@ -268,7 +285,8 @@ class CryptoPaperTradingRunner:
                         "symbol": tgt_symbol,
                         "price": price,
                         "lag_reference": ref_symbol,
-                        "rejection_reasons": gate_result["rejection_reasons"]
+                        "rejection_reasons": gate_result["rejection_reasons"],
+                        "kronos": kronos
                     })
 
         self.previous_events.update(events)
@@ -381,6 +399,11 @@ def main():
                         help="Minimum reaction gap (%%) for a lag signal")
     parser.add_argument("--take-profit-pct", type=float, default=0.5)
     parser.add_argument("--stop-loss-pct", type=float, default=0.25)
+    parser.add_argument("--kronos-filter", choices=["off", "shadow", "on"], default="off",
+                        help="off: unchanged behaviour. shadow: log what Kronos "
+                             "would have said without changing decisions. "
+                             "on: also skip entries Kronos disagrees with.")
+    parser.add_argument("--kronos-device", default="cpu")
     args = parser.parse_args()
 
     CryptoPaperTradingRunner(args).run()

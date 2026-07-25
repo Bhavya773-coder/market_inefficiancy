@@ -1,0 +1,14 @@
+# Optional — only needed for --kronos-filter shadow|on on the crypto runner.
+# Kept out of requirements.txt because torch is ~122MB and the default
+# (filter=off) path never imports it.
+#
+# Install CPU-only torch (Kronos-small is 24.7M params; GPU is unnecessary):
+#   pip install -c constraints-kronos.txt --index-url https://download.pytorch.org/whl/cpu torch
+#   pip install -c constraints-kronos.txt -r requirements-kronos.txt
+#
+# IMPORTANT: upstream Kronos pins pandas==2.2.2, which would DOWNGRADE this
+# project's pandas 3.0.3 and break the F&O security-master reader. Always
+# install with constraints-kronos.txt so pandas/numpy cannot be moved.
+einops
+safetensors
+huggingface_hub>=0.33.1
