@@ -61,6 +61,7 @@ def _round_trips(trades):
                 "hold_min": hold_s / 60.0,
                 "expected_net_pct": gate.get("net_profit_pct"),
                 "expected_annualized_pct": gate.get("annualized_return_pct"),
+                "kronos": entry.get("kronos"),
             })
     return rows
 
@@ -81,19 +82,30 @@ def build(session_dir, out=None):
     cols = ["Entry Time", "Exit Time", "Symbol", "Strategy", "Direction", "Lag Reference",
             "Quantity", "Buy Price (USDT)", "Sell Price (USDT)", "Capital Deployed (USDT)",
             "Gross Revenue (USDT)", "Net PnL (USDT)", "Net PnL %", "Hold (min)",
-            "Entry Expected Net %", "Entry Expected Annualized %"]
+            "Entry Expected Net %", "Entry Expected Annualized %",
+            "Kronos Direction", "Kronos Forecast %"]
     td.append(cols)
     for c in td[1]:
         c.fill = SUBHEAD; c.font = WHITE; c.border = THIN; c.alignment = Alignment(wrap_text=True, vertical="center")
     for r in rows:
+        k = r.get("kronos") or {}
         td.append([r["entry_ts"], r["exit_ts"], r["symbol"], r["strategy"], r["direction"],
                    r["reference"], r["qty"], r["buy"], r["sell"], r["capital"], r["revenue"],
-                   r["net"], r["net_pct"], r["hold_min"], r["expected_net_pct"], r["expected_annualized_pct"]])
+                   r["net"], r["net_pct"], r["hold_min"], r["expected_net_pct"],
+                   r["expected_annualized_pct"],
+                   ("UP" if k.get("up") else "DOWN") if k else "not consulted",
+                   k.get("move_pct")])
     last = td.max_row
     if rows:
+        # Literal values, not formulas: openpyxl writes no cached result, so
+        # viewers that don't recalculate on open would show these blank.
+        n = len(rows)
         td.append(["Total / Avg", None, None, None, None, None,
-                   f"=SUM(G2:G{last})", None, None, f"=SUM(J2:J{last})", f"=SUM(K2:K{last})",
-                   f"=SUM(L2:L{last})", f"=AVERAGE(M2:M{last})", f"=AVERAGE(N2:N{last})", None, None])
+                   sum(r["qty"] for r in rows), None, None,
+                   sum(r["capital"] for r in rows), sum(r["revenue"] for r in rows),
+                   sum(r["net"] for r in rows),
+                   sum(r["net_pct"] for r in rows) / n,
+                   sum(r["hold_min"] for r in rows) / n, None, None, None, None])
         for c in td[td.max_row]:
             c.font = BOLD; c.fill = KPI
     # number formats
@@ -105,7 +117,9 @@ def build(session_dir, out=None):
                 c.number_format = "0.0000%" if c.column_letter == "M" else "0.000"
             elif c.column_letter == "N":
                 c.number_format = "0.0"
-    widths = [10, 10, 12, 12, 10, 13, 9, 15, 15, 18, 18, 14, 12, 10, 16, 20]
+            elif c.column_letter == "R":
+                c.number_format = "0.000"
+    widths = [10, 10, 12, 12, 10, 13, 9, 15, 15, 18, 18, 14, 12, 10, 16, 20, 15, 16]
     for i, w in enumerate(widths, 1):
         td.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
@@ -143,6 +157,10 @@ def build(session_dir, out=None):
         ("Blocked by Ranking Engine", stats.get("blocked"), "Signals rejected: not profitable after costs / below return hurdle."),
         ("Poll Errors", stats.get("poll_errors"), "Failed feed polls during the session."),
         ("Open Positions at Close", ", ".join(open_positions) or "none", "Positions still held when the session ended."),
+        ("Kronos Vetoed Entries",
+         sum(1 for t in trades if t.get("type") == "blocked"
+             and "kronos_forecast_disagrees" in (t.get("rejection_reasons") or [])),
+         "Cost-gate-approved entries skipped because the Kronos forecast disagreed."),
     ]
     for j, vr in enumerate(val_rows):
         es.append(vr)

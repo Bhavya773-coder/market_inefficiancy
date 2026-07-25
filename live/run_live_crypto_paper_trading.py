@@ -403,7 +403,8 @@ def main():
                         help="off: unchanged behaviour. shadow: log what Kronos "
                              "would have said without changing decisions. "
                              "on: also skip entries Kronos disagrees with.")
-    parser.add_argument("--kronos-device", default="cpu")
+    parser.add_argument("--kronos-device", default="auto",
+                        help="auto picks the GPU when available, else CPU")
     args = parser.parse_args()
 
     CryptoPaperTradingRunner(args).run()

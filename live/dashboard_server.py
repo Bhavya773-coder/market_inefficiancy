@@ -176,6 +176,7 @@ class DashboardState:
                     "quantity": t.get("quantity"),
                     "reference": t.get("lag_reference"),
                     "gate": t.get("gate_evaluation"),
+                    "kronos": t.get("kronos"),
                     "timestamp": t.get("timestamp")
                 })
             elif t.get("type") == "blocked":
@@ -183,6 +184,7 @@ class DashboardState:
                     "kind": "BLOCKED", "symbol": t.get("symbol"), "price": t.get("price"),
                     "reference": t.get("lag_reference"),
                     "rejection_reasons": t.get("rejection_reasons"),
+                    "kronos": t.get("kronos"),
                     "timestamp": t.get("timestamp")
                 })
             elif t.get("type") == "exit":
@@ -192,6 +194,26 @@ class DashboardState:
                 })
             if len(opportunity_rows) >= 25:
                 break
+
+        # ---- Kronos filter telemetry ----
+        # Read-only: whatever the runner already logged. The dashboard never
+        # runs the model itself, so it cannot slow the trading loop down.
+        kronos_rows = [t for t in trades if t.get("kronos")]
+        kronos_blocks = [t for t in trades
+                         if t.get("type") == "blocked"
+                         and "kronos_forecast_disagrees" in (t.get("rejection_reasons") or [])]
+        latest_kronos = {}
+        for t in trades:
+            if t.get("kronos") and t.get("symbol"):
+                latest_kronos[t["symbol"]] = dict(t["kronos"],
+                                                  at=t.get("timestamp"),
+                                                  outcome=t.get("type"))
+        kronos = {
+            "consulted": len(kronos_rows),
+            "vetoed_entries": len(kronos_blocks),
+            "agreed": sum(1 for t in kronos_rows if t["kronos"].get("up")),
+            "latest": latest_kronos,
+        }
 
         # ---- Health strip ----
         token = _token_status(self.env_file)
@@ -229,6 +251,7 @@ class DashboardState:
                 "detections_seen": len(detections)
             },
             "session_summary": summary,
+            "kronos": kronos,
             "opportunities": opportunity_rows
         }
 
@@ -287,6 +310,9 @@ th{color:var(--muted);font-weight:600;font-size:10.5px;text-transform:uppercase;
   <div class="grid2">
     <div>
       <div class="panel"><h2>Live Quotes (USDT)</h2><div class="tickers" id="tickers"></div></div>
+      <div class="panel"><h2>Kronos Forecast Filter <span id="kstat" class="badge"></span></h2>
+        <div id="kronos-empty" class="dim" style="font-size:12px">No forecasts logged yet — either the filter is off, or no cost-gate-approved signal has needed one. Kronos is only consulted for candidates that already cleared the cost gate.</div>
+        <div class="tickers" id="kronos-cards"></div></div>
       <div class="panel"><h2>Opportunity Flow — ranking-engine verdicts</h2><table id="opps"></table></div>
     </div>
     <div>
@@ -343,14 +369,29 @@ async function tick(){
    const el=document.getElementById('spark-'+k); if(el) spark(el, arr);
  });
 
+ const k=s.kronos||{consulted:0,latest:{}};
+ document.getElementById('kstat').innerHTML = k.consulted
+   ? '<span class="badge live">'+k.consulted+' consulted</span> &nbsp;<span class="badge blocked">'+k.vetoed_entries+' vetoed</span> &nbsp;<span class="dim" style="font-size:11px">'+k.agreed+' agreed</span>'
+   : '';
+ const kEntries=Object.entries(k.latest||{});
+ document.getElementById('kronos-empty').style.display = kEntries.length? 'none':'block';
+ document.getElementById('kronos-cards').innerHTML = kEntries.map(([sym,v])=>
+   '<div class="ticker"><div class="sym">'+sym+'</div>'+
+   '<div class="px '+(v.up?'pos':'neg')+'">'+(v.up?'▲ UP':'▼ DOWN')+'</div>'+
+   '<div class="dim" style="font-size:11px">'+fmt(v.move_pct,3)+'% / '+v.horizon+'m &nbsp;'+
+   (v.at?String(v.at).slice(11,19):'')+'</div></div>').join('');
+
  document.getElementById('opps').innerHTML =
-  '<tr><th>Kind</th><th>Symbol</th><th>Ref</th><th>Px</th><th>Engine breakdown / rejection</th><th>At</th></tr>'+
+  '<tr><th>Kind</th><th>Symbol</th><th>Ref</th><th>Px</th><th>Kronos</th><th>Engine breakdown / rejection</th><th>At</th></tr>'+
   (s.opportunities.length? s.opportunities.map(o=>{
     let detail='';
     if(o.kind==='ENTRY'&&o.gate) detail='net '+fmt(o.gate.net_profit_pct,3)+'% | ann '+fmt(o.gate.annualized_return_pct,1)+'% | liq '+fmt(o.gate.liquidity_score,3);
     if(o.kind==='BLOCKED') detail=(o.rejection_reasons||[]).join(', ');
-    return '<tr><td class="kind-'+o.kind+'">'+o.kind+'</td><td>'+o.symbol+'</td><td class="dim">'+(o.reference||'—')+'</td><td>'+fmt(o.price,4)+'</td><td class="dim">'+detail+'</td><td class="dim">'+fmt(o.timestamp).slice(11,19)+'</td></tr>';
-  }).join('') : '<tr><td colspan=6 class="dim">no signals yet</td></tr>');
+    const kc = o.kronos
+      ? '<span class="'+(o.kronos.up?'pos':'neg')+'">'+(o.kronos.up?'▲':'▼')+' '+fmt(o.kronos.move_pct,3)+'%</span>'
+      : '<span class="dim">—</span>';
+    return '<tr><td class="kind-'+o.kind+'">'+o.kind+'</td><td>'+o.symbol+'</td><td class="dim">'+(o.reference||'—')+'</td><td>'+fmt(o.price,4)+'</td><td>'+kc+'</td><td class="dim">'+detail+'</td><td class="dim">'+fmt(o.timestamp).slice(11,19)+'</td></tr>';
+  }).join('') : '<tr><td colspan=7 class="dim">no signals yet</td></tr>');
 
  document.getElementById('positions').innerHTML =
   '<tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Mark</th><th>Unrl. PnL</th></tr>'+

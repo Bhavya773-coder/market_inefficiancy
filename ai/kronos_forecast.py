@@ -22,6 +22,17 @@ _CACHE = {}
 _PREDICTOR = None
 
 
+def _resolve_device(device):
+    """"auto" -> cuda when a GPU is actually usable, else cpu."""
+    if device not in (None, "auto"):
+        return device
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def _predictor(model, tokenizer, device, max_context):
     """Loads once per process. Imported lazily so torch stays out of the
     default (filter-off) path entirely."""
@@ -31,23 +42,23 @@ def _predictor(model, tokenizer, device, max_context):
         _PREDICTOR = KronosPredictor(
             Kronos.from_pretrained(model),
             KronosTokenizer.from_pretrained(tokenizer),
-            device=device, max_context=max_context,
+            device=_resolve_device(device), max_context=max_context,
         )
     return _PREDICTOR
 
 
 def direction(connector, symbol, model="NeoQuasar/Kronos-small",
-              tokenizer="NeoQuasar/Kronos-Tokenizer-base", device="cpu",
+              tokenizer="NeoQuasar/Kronos-Tokenizer-base", device="auto",
               max_context=512, lookback=LOOKBACK, horizon=HORIZON,
               timeframe="1m", temperature=1.0, top_p=0.9):
     """
     Forecasts `symbol` and returns {"up": bool, "move_pct": float,
     "horizon": int} — or None if anything at all goes wrong.
 
-    ponytail: synchronous, ~3-4s on CPU. Acceptable because lag signals are
-    rare (~1.7% of ticks) and callers only ask about candidates that already
-    cleared the cost gate. Prefetch in a background thread if signal rate
-    rises enough that a blocked poll cycle starts costing fills.
+    ponytail: synchronous. ~0.4-0.6s on the RTX 4050 (125MB VRAM), ~3.8s on
+    CPU. Well inside the 3s poll cadence on GPU, and callers only ask about
+    candidates that already cleared the cost gate, so no prefetch thread is
+    needed. Revisit if forced onto CPU or if the instrument list grows a lot.
     """
     try:
         import pandas as pd
