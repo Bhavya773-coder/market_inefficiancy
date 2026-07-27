@@ -77,7 +77,8 @@ def build_candidate(symbol, nse_q, bse_q):
 
 
 def check(nse_quotes, bse_quotes, universe=DUAL_LISTED_STOCKS,
-          max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None):
+          max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None,
+          available_capital=AVAILABLE_CAPITAL):
     """
     Pure function so it can be tested without live Dhan. Returns
     {"ranked": [...], "rejected": [...], "lag_skipped": [(symbol, lag_seconds), ...]}
@@ -106,7 +107,7 @@ def check(nse_quotes, bse_quotes, universe=DUAL_LISTED_STOCKS,
         if candidate:
             candidates.append(candidate)
 
-    result = ranking_engine.rank(candidates, available_capital=AVAILABLE_CAPITAL)
+    result = ranking_engine.rank(candidates, available_capital=available_capital)
     result["lag_skipped"] = lag_skipped
     return result
 

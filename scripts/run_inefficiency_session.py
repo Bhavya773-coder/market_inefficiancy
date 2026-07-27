@@ -72,7 +72,8 @@ def load_mcx_universe(commodities=MCX_COMMODITIES, csv_path="security_id_list.cs
     return universe
 
 
-def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None):
+def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None,
+               available_capital=AVAILABLE_CAPITAL):
     """Calendar spread = far vs fair(near). Reuses cost-of-carry math."""
     validator = QuoteFreshnessValidator()
     ranking_engine = ranking_engine or OpportunityRankingEngine()
@@ -91,7 +92,7 @@ def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine
         if not cand:
             continue
         cand["opportunity_id"] = f"{comm}|mcx_calendar|{cand['metadata']['direction']}"
-        ev = ranking_engine.evaluate(cand, available_capital=AVAILABLE_CAPITAL)
+        ev = ranking_engine.evaluate(cand, available_capital=available_capital)
         ev["strategy"] = "mcx_calendar"
         ev["direction"] = cand["metadata"]["direction"]
         ev["metadata"] = cand["metadata"]
@@ -144,7 +145,8 @@ def collect_rows(ts, nse_bse_res, fno_res, mcx_res):
 
 # ---------- one poll ----------
 
-def poll_once(connector, fno_universe, mcx_universe):
+def poll_once(connector, fno_universe, mcx_universe,
+              available_capital=AVAILABLE_CAPITAL):
     ts = datetime.now(timezone.utc).isoformat()
 
     # NSE + BSE stock quotes keyed by symbol
@@ -156,23 +158,27 @@ def poll_once(connector, fno_universe, mcx_universe):
     bse_raw = connector.get_last_prices("BSE_EQ", bse_ids)
     nse_quotes = {by_nse[q["security_id"]]: q for q in nse_raw["quotes"]}
     bse_quotes = {by_bse[q["security_id"]]: q for q in bse_raw["quotes"]}
-    nse_bse_res = nse_bse_check(nse_quotes, bse_quotes)
+    nse_bse_res = nse_bse_check(nse_quotes, bse_quotes,
+                                available_capital=available_capital)
 
     # F&O (its own spot + fno batch calls)
     spot_q, fno_q = fetch_fno_quotes(connector, fno_universe)
-    fno_res = detect_fno(fno_universe, spot_q, fno_q)
+    fno_res = detect_fno(fno_universe, spot_q, fno_q,
+                         available_capital=available_capital)
 
     # MCX commodities
     mcx_ids = [u["near_id"] for u in mcx_universe.values()] + \
               [u["far_id"] for u in mcx_universe.values()]
     mcx_q = {q["security_id"]: q for q in connector.get_last_prices("MCX_COMM", mcx_ids)["quotes"]} \
         if mcx_ids else {}
-    mcx_res = detect_mcx(mcx_universe, mcx_q)
+    mcx_res = detect_mcx(mcx_universe, mcx_q,
+                         available_capital=available_capital)
 
     return ts, collect_rows(ts, nse_bse_res, fno_res, mcx_res)
 
 
-def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0):
+def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
+          available_capital=AVAILABLE_CAPITAL):
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     ineff_log = open(out / "inefficiencies.jsonl", "a", encoding="utf-8")
@@ -190,7 +196,8 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0):
                 print(f"Market closed ({reason}); stopping.")
                 break
             try:
-                ts, rows = poll_once(connector, fno_universe, mcx_universe)
+                ts, rows = poll_once(connector, fno_universe, mcx_universe,
+                                    available_capital=available_capital)
             except Exception as e:
                 print(f"poll error: {e}")
                 time.sleep(poll_interval); continue
@@ -220,6 +227,10 @@ def main():
     p.add_argument("--watch", action="store_true")
     p.add_argument("--poll-interval", type=float, default=5.0)
     p.add_argument("--output-dir", default="storage/session")
+    p.add_argument("--capital", type=float, default=AVAILABLE_CAPITAL,
+                   help="paper capital in INR the ranking engine may deploy "
+                        "per opportunity. Caps position size and drives the "
+                        "insufficient_capital rejection.")
     args = p.parse_args()
 
     fno_universe = load_fno_universe()
@@ -232,9 +243,11 @@ def main():
     connector = DhanConnector(min_request_interval_seconds=1.1)
 
     if args.watch:
-        watch(connector, fno_universe, mcx_universe, args.output_dir, args.poll_interval)
+        watch(connector, fno_universe, mcx_universe, args.output_dir,
+              args.poll_interval, available_capital=args.capital)
     else:
-        ts, rows = poll_once(connector, fno_universe, mcx_universe)
+        ts, rows = poll_once(connector, fno_universe, mcx_universe,
+                             available_capital=args.capital)
         execu = [r for r in rows if r["is_executable"]]
         print(f"\n{len(rows)} checked, {len(execu)} executable:")
         for r in rows:

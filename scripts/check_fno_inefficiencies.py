@@ -72,7 +72,8 @@ def load_universe(symbols=UNDERLYINGS, csv_path="security_id_list.csv", now=None
 
 
 def detect(universe, spot_quotes, fno_quotes, now=None,
-           max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None):
+           max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None,
+           available_capital=AVAILABLE_CAPITAL):
     """
     Pure detection pass (testable offline). quotes keyed by security_id.
     Returns {"detections": [evaluation+metadata dicts], "lag_skipped": [...]}
@@ -122,7 +123,7 @@ def detect(universe, spot_quotes, fno_quotes, now=None,
                     lag_skipped.append((symbol, "put_call_parity"))
 
         for cand in candidates:
-            ev = ranking_engine.evaluate(cand, available_capital=AVAILABLE_CAPITAL)
+            ev = ranking_engine.evaluate(cand, available_capital=available_capital)
             ev["strategy"] = cand["opportunity_id"].split("|")[1]
             ev["direction"] = cand["metadata"]["direction"]
             ev["metadata"] = cand["metadata"]

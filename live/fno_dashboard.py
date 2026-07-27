@@ -107,13 +107,16 @@ def build_state(session_dir, max_rows=100):
     captures = [t for t in trades if t.get("type") == "capture"]
     by_strategy = {}
     for c in captures:
-        by_strategy[c["strategy"]] = by_strategy.get(c["strategy"], 0.0) + c["net_profit"]
+        # Defensive: a capture missing strategy/net_profit must not 500 the
+        # whole dashboard, it should just show up as unattributed.
+        strat = c.get("strategy") or "unknown"
+        by_strategy[strat] = by_strategy.get(strat, 0.0) + (c.get("net_profit") or 0.0)
     executable_count = sum(1 for r in all_rows if r.get("is_executable"))
     return {
         "session_dir": str(d),
         "rows": rows,
         "captures": len(captures),
-        "running_pnl": sum(t["net_profit"] for t in captures),
+        "running_pnl": sum((t.get("net_profit") or 0.0) for t in captures),
         "total_pnl": summary["total_paper_pnl"] if summary else None,
         "total_scanned": len(all_rows),
         "executable_count": executable_count,
