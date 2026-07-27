@@ -29,7 +29,6 @@ from dotenv import dotenv_values
 from live.run_live_paper_trading import is_market_open_now
 
 DHAN_API_HOST = "https://api.dhan.co"
-CRYPTO_API_URL = "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USDT"
 
 ENGINE_TESTS = [
     "replay/settlement_engine_test.py",
@@ -143,8 +142,7 @@ def check_market_hours(now_override=None):
         return check.ok(f"market open now ({ist.strftime('%Y-%m-%d %H:%M IST')})")
     return check.fail(
         f"market closed: {reason} ({ist.strftime('%Y-%m-%d %H:%M IST')})",
-        "Run this again on a trading day between 9:15 and 15:30 IST. "
-        "The crypto session (24/7) can be launched any time instead."
+        "Run this again on a trading day between 9:15 and 15:30 IST."
     )
 
 
@@ -165,9 +163,9 @@ def check_redis():
 
 
 def check_network():
-    check = Check("Network reachable (Dhan + Crypto.com endpoints)")
+    check = Check("Network reachable (Dhan endpoint)")
     problems = []
-    for name, url in [("Dhan", DHAN_API_HOST), ("Crypto.com", CRYPTO_API_URL)]:
+    for name, url in [("Dhan", DHAN_API_HOST)]:
         try:
             requests.get(url, timeout=8)
         except Exception as e:
@@ -261,13 +259,13 @@ def summarize(checks):
         print("  PYTHONPATH=. python live/run_live_paper_trading.py \\")
         print("      --output-dir storage/live_nse_$(date +%Y%m%d) --poll-interval 1")
         print()
-        print("  # Crypto live paper-trading session (24/7, 1 hour):")
-        print("  PYTHONPATH=. python live/run_live_crypto_paper_trading.py \\")
-        print("      --duration 3600 --output-dir storage/crypto_live_$(date +%Y%m%d)")
+        print("  # F&O / spot inefficiency session (all Dhan-reachable markets):")
+        print("  PYTHONPATH=. python scripts/run_inefficiency_session.py --watch \\")
+        print("      --capital 1000000 --output-dir storage/session_$(date +%Y%m%d)")
         print()
-        print("  # Live dashboard (open http://localhost:8720 after starting):")
-        print("  PYTHONPATH=. python live/dashboard_server.py \\")
-        print("      --session-dir storage/live_nse_$(date +%Y%m%d)")
+        print("  # F&O dashboard (open http://localhost:8730 after starting):")
+        print("  PYTHONPATH=. python live/fno_dashboard.py \\")
+        print("      --session-dir storage/session_$(date +%Y%m%d)")
         return 0
 
     print(f"NOT READY — {len(required_failures)} required check(s) failing:")

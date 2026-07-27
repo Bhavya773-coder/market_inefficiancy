@@ -1,16 +1,24 @@
 """
-Kronos directional second-opinion for the crypto lag strategy.
+Kronos directional forecast: "which way is this instrument likely to go".
 
-The lag gate already answers "is this profitable IF it works". This answers
-"is it likely to work" by forecasting the target's next candles.
+Source-agnostic. `connector` is duck-typed — anything exposing
+get_candlesticks(symbol, timeframe=..., count=...) -> [{"timestamp_ms",
+"open","high","low","close","volume"}, ...] works, so this can be pointed at
+any market that can produce OHLCV candles.
+
+NOTE (2026-07-27): the crypto trading path this was originally built for has
+been removed, so nothing currently calls this in production. It is kept for
+reuse against F&O/MCX candles, which needs a connector exposing the
+get_candlesticks shape above — the Dhan connector does not today.
 
 Fail-open by contract: every failure path returns None ("no opinion"), which
 callers must treat as "do not block". A broken model must never stop trading.
 
-Validated offline by scripts/kronos_backtest.py (2026-07-24): on 1m and 5m
-samples the UP subset beat the unfiltered baseline by +3.5pp win rate both
-times, and the DOWN subset was consistently worse. Small, not individually
-significant — hence --kronos-filter defaults to off/shadow.
+Validated offline by scripts/kronos_backtest.py (2026-07-24) on crypto 1m/5m
+samples: the UP subset beat the unfiltered baseline by +3.5pp win rate both
+times and the DOWN subset was consistently worse. Small, and not individually
+significant. That evidence does not transfer to a different asset class —
+re-run the backtest before trusting it anywhere new.
 """
 OHLCV = ["open", "high", "low", "close", "volume"]
 LOOKBACK = 180

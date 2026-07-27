@@ -1,26 +1,27 @@
 """
-Phase-0 validation: does a Kronos forecast filter improve the crypto lag
-strategy's LONG entries?
+Does a Kronos forecast filter improve the win rate of LONG entries?
 
-The live strategy (live/run_live_crypto_paper_trading.py) buys a symbol that
-lagged behind a reference move, then exits on take-profit / stop-loss. The
-cost gate already checks "is this profitable IF it works"; nothing checks
-"is it likely to work". This script measures whether Kronos's directional
-forecast adds that missing edge.
-
-Method (walk-forward over real crypto.com 1m candles, no simulated data):
+Walk-forward over real OHLCV candles, no simulated data:
   for each test point t:
     - feed Kronos candles[t-lookback : t], ask for a `horizon`-candle forecast
-    - simulate a LONG entry at close[t] with the live runner's real
-      take_profit_pct / stop_loss_pct, walking candles t+1..t+horizon and
-      checking intrabar high/low for a touch
+    - simulate a LONG entry at close[t] with the given take_profit_pct /
+      stop_loss_pct, walking candles t+1..t+horizon and checking intrabar
+      high/low for a touch
     - record the realized outcome and whether Kronos predicted UP
   then compare the win rate of ALL longs vs only Kronos-approved longs.
 
 If the Kronos-approved subset is not meaningfully better, the filter is not
-worth wiring into the live path.
+worth wiring into a live path.
 
-    PYTHONPATH=. python scripts/kronos_backtest.py
+NOTE (2026-07-27): this was built against the crypto connector, which has
+since been removed along with the rest of the crypto module. The harness is
+kept because the method is asset-agnostic, but it needs a candle source
+injected before it can run — see load_candles(). A usable connector exposes
+    get_candlesticks(symbol, timeframe=..., count=...)
+      -> [{"timestamp_ms","open","high","low","close","volume"}, ...]
+sorted oldest-first. The Dhan connector does not expose that today.
+
+    PYTHONPATH=. python scripts/kronos_backtest.py   # raises until wired
 """
 import argparse
 import json
@@ -28,11 +29,25 @@ import time
 
 import pandas as pd
 
-from connectors.crypto_connector import CryptoConnector
 from vendor.kronos import Kronos, KronosTokenizer, KronosPredictor
 
-DEFAULT_SYMBOLS = ["BTC_USDT", "ETH_USDT", "SOL_USDT", "XRP_USDT", "LTC_USDT"]
+DEFAULT_SYMBOLS = []
 OHLCV = ["open", "high", "low", "close", "volume"]
+
+
+def make_connector():
+    """
+    Returns the candle source for the backtest.
+
+    Deliberately raises rather than silently falling back to synthetic data:
+    a backtest that quietly measures made-up candles is worse than one that
+    refuses to run.
+    """
+    raise NotImplementedError(
+        "No candle source configured. The crypto connector this backtest used "
+        "was removed on 2026-07-27. Provide an object exposing "
+        "get_candlesticks(symbol, timeframe=..., count=...) and return it here."
+    )
 
 
 def simulate_long(candles, entry_idx, horizon, take_profit_pct, stop_loss_pct):
@@ -72,7 +87,7 @@ def run(args):
     predictor = KronosPredictor(model, tokenizer, device=args.device,
                                 max_context=args.max_context)
 
-    connector = CryptoConnector()
+    connector = make_connector()
     data = {}
     for sym in args.symbols:
         data[sym] = load_candles(connector, sym, args.timeframe, args.count)

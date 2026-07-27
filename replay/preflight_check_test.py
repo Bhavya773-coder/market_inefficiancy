@@ -131,8 +131,8 @@ out = buf.getvalue()
 assert code == 0
 assert "ALL REQUIRED CHECKS PASSED" in out
 assert "run_live_paper_trading.py" in out
-assert "run_live_crypto_paper_trading.py" in out
-assert "dashboard_server.py" in out
+assert "run_inefficiency_session.py" in out
+assert "fno_dashboard.py" in out
 print("summarize success path: exit 0 + launch commands printed")
 
 # 10. decode_jwt_exp edge cases
