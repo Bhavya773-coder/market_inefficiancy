@@ -128,6 +128,12 @@ def _row(ts, opp_id, asset, strategy, direction, ev):
         "action": action_text(strategy, direction),
         "net_profit": ev["net_profit"], "net_profit_pct": ev["net_profit_pct"],
         "annualized_return_pct": ev.get("annualized_return_pct", 0.0),
+        # capital_required is set from liquidity-capped quantity, not from
+        # available_capital, so it is the same number at any capital level.
+        # Logging it makes "would this have qualified at capital X?" an
+        # offline question — Dhan's rate limit will not tolerate running a
+        # second session just to compare capital levels.
+        "capital_required": ev.get("capital_required"),
         "is_executable": ev["is_executable"], "rejection_reasons": ev["rejection_reasons"],
     }
 
