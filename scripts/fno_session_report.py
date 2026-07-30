@@ -26,6 +26,40 @@ BOLD = Font(bold=True)
 STRATEGIES = ["nse_bse_arb", "futures_basis", "put_call_parity", "mcx_calendar"]
 
 
+# How each leg pair is actually funded in a real account. Leverage is only
+# honest for the first category; the other two need cash or borrowed stock,
+# which a margin multiplier does not provide.
+MARGINED = "MARGINED"            # futures vs futures - real F&O margin applies
+CASH_REQUIRED = "CASH REQUIRED"  # a leg buys actual shares - no leverage
+SHORT_SPOT = "SHORT SPOT"        # a leg shorts actual shares - needs SLB
+
+FUNDING = {
+    ("mcx_calendar", "CASH_AND_CARRY"): MARGINED,
+    ("mcx_calendar", "REVERSE_CASH_AND_CARRY"): MARGINED,
+    ("futures_basis", "CASH_AND_CARRY"): CASH_REQUIRED,
+    ("futures_basis", "REVERSE_CASH_AND_CARRY"): SHORT_SPOT,
+    ("put_call_parity", "CONVERSION"): CASH_REQUIRED,
+    ("put_call_parity", "REVERSAL"): SHORT_SPOT,
+}
+FUNDING_NOTE = {
+    MARGINED: "Both legs are futures. Exchange margin applies and is a "
+              "fraction of notional, so leverage here is real - arguably "
+              "conservative, since offsetting calendar legs get margin relief.",
+    CASH_REQUIRED: "One leg buys the actual shares. 1L of cash cannot buy 6L "
+                   "of stock; F&O margin does not fund an equity purchase. "
+                   "Leverage on this row is fictional.",
+    SHORT_SPOT: "One leg shorts the actual shares. Indian retail needs SLB "
+                "for an overnight short, which is thin and expensive. Both "
+                "the leverage AND the executability are questionable.",
+}
+
+
+def funding_basis(strategy, direction):
+    if strategy == "nse_bse_arb":
+        return CASH_REQUIRED  # buy on one exchange, sell on the other
+    return FUNDING.get((strategy, direction), CASH_REQUIRED)
+
+
 def _load(session_dir):
     d = pathlib.Path(session_dir)
     rows = [json.loads(x) for x in (d / "inefficiencies.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -46,18 +80,30 @@ def _enrich_captures(rows, trades):
         net = c["net_profit"]
         net_pct = m.get("net_profit_pct")
         capital = net / (net_pct / 100) if net_pct else None
+        direction = m.get("direction")
         out.append({
             "time": c["timestamp"][11:19], "asset": c["asset"], "strategy": c["strategy"],
-            "direction": m.get("direction"), "action": m.get("action"),
+            "direction": direction, "action": m.get("action"),
             "net": net, "net_pct_frac": (net_pct / 100) if net_pct is not None else None,
             "ann_frac": (m.get("annualized_return_pct") / 100) if m.get("annualized_return_pct") is not None else None,
             "capital": capital,
+            "funding": funding_basis(c["strategy"], direction),
         })
     return out
 
 
+def _session_config(trades):
+    """Funding basis the run was started with, if the runner recorded it."""
+    cfg = next((t for t in trades if t.get("type") == "session_config"), None)
+    if not cfg:
+        return None
+    return {"capital": cfg.get("capital"), "leverage": cfg.get("leverage", 1.0),
+            "buying_power": cfg.get("buying_power")}
+
+
 def build(session_dir, out=None):
     rows, trades = _load(session_dir)
+    cfg = _session_config(trades)
     caps = _enrich_captures(rows, trades)
     date_str = datetime.now().strftime("%B %d, %Y")
 
@@ -67,13 +113,22 @@ def build(session_dir, out=None):
     td = wb.active
     td.title = "Trade Details"
     cols = ["Time", "Asset", "Strategy", "Direction", "Action (Buy/Sell)",
-            "Net Profit (INR)", "Net Profit %", "Annualized Return %", "Capital Deployed (INR)"]
+            "Net Profit (INR)", "Net Profit %", "Annualized Return %",
+            "Capital Deployed (INR)", "Funding basis", "Real at cash capital?"]
     td.append(cols)
     for c in td[1]:
         c.fill = SUBHEAD; c.font = WHITE; c.alignment = Alignment(wrap_text=True, vertical="center")
+    cash_cap = (cfg or {}).get("capital")
     for r in caps:
+        if r["funding"] == MARGINED:
+            real = "YES (margined)"
+        elif cash_cap and r["capital"] and r["capital"] <= cash_cap:
+            real = "YES (fits cash)"
+        else:
+            real = "NO"
         td.append([r["time"], r["asset"], r["strategy"], r["direction"], r["action"],
-                   r["net"], r["net_pct_frac"], r["ann_frac"], r["capital"]])
+                   r["net"], r["net_pct_frac"], r["ann_frac"], r["capital"],
+                   r["funding"], real])
     last = td.max_row
     n_caps = len(caps)
     total_net_col = sum(r["net"] for r in caps)
@@ -90,7 +145,7 @@ def build(session_dir, out=None):
                 c.number_format = "#,##0.00"
             elif c.column_letter in ("G", "H"):
                 c.number_format = "0.0000%"
-    for i, w in enumerate([10, 12, 16, 24, 30, 15, 12, 16, 20], 1):
+    for i, w in enumerate([10, 12, 16, 24, 30, 15, 12, 16, 20, 16, 20], 1):
         td.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
     # ---------------- Executive Summary ----------------
@@ -116,14 +171,59 @@ def build(session_dir, out=None):
         vc = es.cell(row=6, column=col, value=val); vc.fill = KPI; vc.font = Font(size=12, bold=True)
         vc.alignment = Alignment(horizontal="center"); vc.number_format = fmt
 
+    # ---- Funding-reality split -------------------------------------
+    # A leverage multiplier raises buying power uniformly, but only
+    # futures-vs-futures legs are genuinely margined. Splitting the P&L keeps
+    # a levered run from reading as if all of it were executable.
+    if cfg and cfg.get("leverage", 1.0) > 1:
+        es.append(["Funding Reality Split (leverage applied)"])
+        es[es.max_row][0].font = WHITE
+        es[es.max_row][0].fill = SUBHEAD
+        es.append([f"Cash capital {cfg['capital']:,.0f} INR  x  leverage "
+                   f"{cfg['leverage']:g}  =  buying power "
+                   f"{cfg['buying_power']:,.0f} INR"])
+        es[es.max_row][0].font = Font(italic=True, color="595959")
+        es.append(["Funding basis", "Captures", "Net P&L (INR)",
+                   "% of total", "What it means"])
+        for c in es[es.max_row]:
+            c.font = WHITE; c.fill = SUBHEAD
+        order = [MARGINED, CASH_REQUIRED, SHORT_SPOT]
+        by_fund = {k: {"n": 0, "net": 0.0} for k in order}
+        for r in caps:
+            by_fund[r["funding"]]["n"] += 1
+            by_fund[r["funding"]]["net"] += r["net"]
+        for k in order:
+            v = by_fund[k]
+            es.append([k, v["n"], v["net"],
+                       (v["net"] / total_net) if total_net else 0,
+                       FUNDING_NOTE[k]])
+            es.cell(row=es.max_row, column=3).number_format = "#,##0.00"
+            es.cell(row=es.max_row, column=4).number_format = "0.0%"
+            es.cell(row=es.max_row, column=5).alignment = Alignment(
+                wrap_text=True, vertical="top")
+        real = by_fund[MARGINED]["net"]
+        fake = by_fund[CASH_REQUIRED]["net"] + by_fund[SHORT_SPOT]["net"]
+        es.append([])
+        es.append(["EXECUTABLE AT THIS CASH LEVEL", real])
+        es[es.max_row][0].font = Font(bold=True, color="006100")
+        es.cell(row=es.max_row, column=2).number_format = "#,##0.00"
+        es.append(["REQUIRES CASH / STOCK BORROW YOU DO NOT HAVE", fake])
+        es[es.max_row][0].font = Font(bold=True, color="C00000")
+        es.cell(row=es.max_row, column=2).number_format = "#,##0.00"
+        es.append([])
+
     # Performance breakdown by strategy (computed directly in Python — no
     # formula cells, so the numbers show up even in viewers that don't
     # recalculate on open)
-    es["A8"] = "Performance Breakdown by Strategy"; es["A8"].font = WHITE; es["A8"].fill = SUBHEAD
+    es.append(["Performance Breakdown by Strategy"])
+    es[es.max_row][0].font = WHITE
+    es[es.max_row][0].fill = SUBHEAD
     es.append(["Strategy", "Trades Taken", "Capital Deployed", "Net Profit", "Return on Capital"])
     for c in es[es.max_row]:
         c.font = WHITE; c.fill = SUBHEAD
-    first = 10
+    # Derived, not hardcoded: the funding-split block above is optional, so a
+    # fixed row number silently mis-sums the totals when it is present.
+    first = es.max_row + 1
     present_strategies = STRATEGIES + sorted({r["strategy"] for r in caps} - set(STRATEGIES))
     strat_totals = {}
     for strat in present_strategies:
