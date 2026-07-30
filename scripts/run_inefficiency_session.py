@@ -184,7 +184,7 @@ def poll_once(connector, fno_universe, mcx_universe,
 
 
 def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
-          available_capital=AVAILABLE_CAPITAL):
+          available_capital=AVAILABLE_CAPITAL, capital=None, leverage=1.0):
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     ineff_log = open(out / "inefficiencies.jsonl", "a", encoding="utf-8")
@@ -193,6 +193,23 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
 
     def log(h, p):
         h.write(json.dumps(p, sort_keys=True, default=str) + "\n"); h.flush()
+
+    # Stamp the funding basis into the session itself. Without this a
+    # leveraged run is indistinguishable from an unleveraged one when the
+    # report is generated days later, and the P&L would read as if it came
+    # from cash on hand.
+    log(trade_log, {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "type": "session_config",
+        "capital": capital if capital is not None else available_capital,
+        "leverage": leverage,
+        "buying_power": available_capital,
+        "note": ("Leverage applied uniformly to every strategy. In reality "
+                 "only futures-vs-futures legs (mcx_calendar) are genuinely "
+                 "margined; cash_and_carry / conversion legs require buying "
+                 "the actual shares and cannot be levered this way."
+                 if leverage > 1 else "No leverage; capital is cash on hand."),
+    })
 
     print(f"Session started; output {out}. Ctrl+C to stop.")
     try:
@@ -237,7 +254,18 @@ def main():
                    help="paper capital in INR the ranking engine may deploy "
                         "per opportunity. Caps position size and drives the "
                         "insufficient_capital rejection.")
+    p.add_argument("--leverage", type=float, default=1.0,
+                   help="multiplier on --capital for buying power, i.e. F&O "
+                        "margin. 10 means 1L of cash can carry 10L of "
+                        "notional. NOTE: only legs that are genuinely "
+                        "margined (futures vs futures) get this in reality; "
+                        "cash-and-carry and conversion legs require buying "
+                        "the actual shares. See the leverage note logged into "
+                        "the session.")
     args = p.parse_args()
+    if args.leverage <= 0:
+        p.error("--leverage must be > 0")
+    buying_power = args.capital * args.leverage
 
     fno_universe = load_fno_universe()
     mcx_universe = load_mcx_universe()
@@ -249,11 +277,14 @@ def main():
     connector = DhanConnector(min_request_interval_seconds=1.1)
 
     if args.watch:
+        print(f"Capital: {args.capital:,.0f} INR x {args.leverage:g} leverage "
+              f"= {buying_power:,.0f} INR buying power")
         watch(connector, fno_universe, mcx_universe, args.output_dir,
-              args.poll_interval, available_capital=args.capital)
+              args.poll_interval, available_capital=buying_power,
+              capital=args.capital, leverage=args.leverage)
     else:
         ts, rows = poll_once(connector, fno_universe, mcx_universe,
-                             available_capital=args.capital)
+                             available_capital=buying_power)
         execu = [r for r in rows if r["is_executable"]]
         print(f"\n{len(rows)} checked, {len(execu)} executable:")
         for r in rows:
