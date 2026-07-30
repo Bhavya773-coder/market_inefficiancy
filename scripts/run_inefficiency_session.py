@@ -121,6 +121,26 @@ def action_text(strategy, direction):
     return ACTION_TEMPLATES.get((strategy, direction), direction)
 
 
+# Which spot-leg direction each strategy actually needs on the real stock.
+# futures_basis and put_call_parity are different arbitrage LENSES, but a
+# REVERSE_CASH_AND_CARRY and a REVERSAL on the same asset both start with
+# "SELL SPOT" -- same short-sale inventory, not two independent trades.
+# mcx_calendar has no spot leg at all (futures vs futures), so it never
+# competes for anything here.
+SPOT_LEG = {
+    ("futures_basis", "CASH_AND_CARRY"): "BUY",
+    ("futures_basis", "REVERSE_CASH_AND_CARRY"): "SELL",
+    ("put_call_parity", "CONVERSION"): "BUY",
+    ("put_call_parity", "REVERSAL"): "SELL",
+}
+
+
+def spot_leg_direction(strategy, direction):
+    if strategy == "nse_bse_arb":
+        return "BUY"  # buying on the cheap exchange is the leg that needs real inventory/timing
+    return SPOT_LEG.get((strategy, direction))
+
+
 def _row(ts, opp_id, asset, strategy, direction, ev):
     return {
         "timestamp": ts, "opportunity_id": opp_id, "asset": asset,
@@ -190,6 +210,11 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
     ineff_log = open(out / "inefficiencies.jsonl", "a", encoding="utf-8")
     trade_log = open(out / "paper_trades.jsonl", "a", encoding="utf-8")
     captured = {}
+    # asset -> "BUY"/"SELL" spot-leg direction already locked in this session.
+    # Real short-sale (or purchase) inventory does not refill mid-session, so
+    # once an asset's spot leg is committed, no other strategy may reuse it
+    # regardless of which opportunity_id it arrives under.
+    spot_committed = {}
 
     def log(h, p):
         h.write(json.dumps(p, sort_keys=True, default=str) + "\n"); h.flush()
@@ -226,11 +251,26 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
                 time.sleep(poll_interval); continue
             for r in rows:
                 log(ineff_log, r)
-                if r["is_executable"] and r["opportunity_id"] not in captured:
-                    captured[r["opportunity_id"]] = r["net_profit"]
-                    log(trade_log, {"timestamp": r["timestamp"], "type": "capture",
-                                    "opportunity_id": r["opportunity_id"], "asset": r["asset"],
-                                    "strategy": r["strategy"], "net_profit": r["net_profit"]})
+                if not r["is_executable"] or r["opportunity_id"] in captured:
+                    continue
+                leg = spot_leg_direction(r["strategy"], r["direction"])
+                held = spot_committed.get(r["asset"])
+                if leg is not None and held is not None:
+                    # Same real inventory another strategy already used on
+                    # this asset this session — not a second opportunity.
+                    log(trade_log, {"timestamp": r["timestamp"], "type": "blocked",
+                                    "asset": r["asset"], "strategy": r["strategy"],
+                                    "opportunity_id": r["opportunity_id"],
+                                    "rejection_reasons": [
+                                        f"spot_leg_already_committed:{held}_by_other_strategy"],
+                                    })
+                    continue
+                captured[r["opportunity_id"]] = r["net_profit"]
+                if leg is not None:
+                    spot_committed[r["asset"]] = leg
+                log(trade_log, {"timestamp": r["timestamp"], "type": "capture",
+                                "opportunity_id": r["opportunity_id"], "asset": r["asset"],
+                                "strategy": r["strategy"], "net_profit": r["net_profit"]})
             print(f"{ts[11:19]}  rows={len(rows)}  captures={len(captured)}  "
                   f"running_pnl={sum(captured.values()):+.2f}")
             time.sleep(poll_interval)
