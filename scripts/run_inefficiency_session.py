@@ -203,18 +203,60 @@ def poll_once(connector, fno_universe, mcx_universe,
     return ts, collect_rows(ts, nse_bse_res, fno_res, mcx_res)
 
 
+def recover_session_state(output_dir):
+    """
+    Rebuilds `captured` and `spot_committed` from a trade log already on
+    disk, so restarting into the same --output-dir does not forget which
+    opportunity_ids and spot legs an earlier run of this same session already
+    used. Without this, a restart wakes up with a blank memory and can
+    double-book a leg the previous run already committed -- exactly the bug
+    a running session avoids for itself, reappearing across a restart.
+
+    Safe on a fresh directory: returns empty state if there is no log yet.
+    """
+    captured, spot_committed = {}, {}
+    p = pathlib.Path(output_dir) / "paper_trades.jsonl"
+    if not p.exists():
+        return captured, spot_committed
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if r.get("type") != "capture":
+            continue
+        captured[r["opportunity_id"]] = r["net_profit"]
+        # Older capture records (and nse_bse_arb's) carry no "direction"
+        # field; the id itself is "asset|strategy|direction" for every
+        # strategy that has one, so parse it rather than require a field
+        # that may not exist in a log written before this field existed.
+        direction = r.get("direction")
+        if direction is None:
+            parts = r["opportunity_id"].split("|")
+            direction = parts[2] if len(parts) == 3 else None
+        leg = spot_leg_direction(r["strategy"], direction)
+        if leg is not None:
+            spot_committed[r["asset"]] = leg
+    return captured, spot_committed
+
+
 def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
           available_capital=AVAILABLE_CAPITAL, capital=None, leverage=1.0):
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     ineff_log = open(out / "inefficiencies.jsonl", "a", encoding="utf-8")
     trade_log = open(out / "paper_trades.jsonl", "a", encoding="utf-8")
-    captured = {}
     # asset -> "BUY"/"SELL" spot-leg direction already locked in this session.
     # Real short-sale (or purchase) inventory does not refill mid-session, so
     # once an asset's spot leg is committed, no other strategy may reuse it
     # regardless of which opportunity_id it arrives under.
-    spot_committed = {}
+    captured, spot_committed = recover_session_state(output_dir)
+    if captured:
+        print(f"Resumed session: {len(captured)} captures and "
+              f"{len(spot_committed)} spot-leg commitments recovered from "
+              f"{out}/paper_trades.jsonl")
 
     def log(h, p):
         h.write(json.dumps(p, sort_keys=True, default=str) + "\n"); h.flush()
@@ -270,7 +312,8 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
                     spot_committed[r["asset"]] = leg
                 log(trade_log, {"timestamp": r["timestamp"], "type": "capture",
                                 "opportunity_id": r["opportunity_id"], "asset": r["asset"],
-                                "strategy": r["strategy"], "net_profit": r["net_profit"]})
+                                "strategy": r["strategy"], "direction": r["direction"],
+                                "net_profit": r["net_profit"]})
             print(f"{ts[11:19]}  rows={len(rows)}  captures={len(captured)}  "
                   f"running_pnl={sum(captured.values()):+.2f}")
             time.sleep(poll_interval)
