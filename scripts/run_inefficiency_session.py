@@ -73,7 +73,7 @@ def load_mcx_universe(commodities=MCX_COMMODITIES, csv_path="security_id_list.cs
 
 
 def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine=None,
-               available_capital=AVAILABLE_CAPITAL):
+               available_capital=AVAILABLE_CAPITAL, annual_rate_pct=6.0):
     """Calendar spread = far vs fair(near). Reuses cost-of-carry math."""
     validator = QuoteFreshnessValidator()
     ranking_engine = ranking_engine or OpportunityRankingEngine()
@@ -88,7 +88,8 @@ def detect_mcx(universe, quotes, max_lag_seconds=MAX_LAG_SECONDS, ranking_engine
             continue
         cand = futures_basis_candidate(
             comm, near_q["last_price"], far_q["last_price"], u["days_between"],
-            u["lot_size"], available_qty=far_q.get("volume") or 100000.0)
+            u["lot_size"], available_qty=far_q.get("volume") or 100000.0,
+            annual_rate_pct=annual_rate_pct)
         if not cand:
             continue
         cand["opportunity_id"] = f"{comm}|mcx_calendar|{cand['metadata']['direction']}"
@@ -172,7 +173,7 @@ def collect_rows(ts, nse_bse_res, fno_res, mcx_res):
 # ---------- one poll ----------
 
 def poll_once(connector, fno_universe, mcx_universe,
-              available_capital=AVAILABLE_CAPITAL):
+              available_capital=AVAILABLE_CAPITAL, annual_rate_pct=6.0):
     ts = datetime.now(timezone.utc).isoformat()
 
     # NSE + BSE stock quotes keyed by symbol
@@ -198,26 +199,27 @@ def poll_once(connector, fno_universe, mcx_universe,
     mcx_q = {q["security_id"]: q for q in connector.get_last_prices("MCX_COMM", mcx_ids)["quotes"]} \
         if mcx_ids else {}
     mcx_res = detect_mcx(mcx_universe, mcx_q,
-                         available_capital=available_capital)
+                         available_capital=available_capital,
+                         annual_rate_pct=annual_rate_pct)
 
     return ts, collect_rows(ts, nse_bse_res, fno_res, mcx_res)
 
 
 def recover_session_state(output_dir):
     """
-    Rebuilds `captured` and `spot_committed` from a trade log already on
-    disk, so restarting into the same --output-dir does not forget which
-    opportunity_ids and spot legs an earlier run of this same session already
-    used. Without this, a restart wakes up with a blank memory and can
-    double-book a leg the previous run already committed -- exactly the bug
-    a running session avoids for itself, reappearing across a restart.
+    Rebuilds `captured`, `spot_committed` and `capital_used` from a trade log
+    already on disk, so restarting into the same --output-dir does not forget
+    what an earlier run of this same session already committed. Without this,
+    a restart wakes up with a blank memory and can double-book a spot leg or
+    re-spend capital the previous run already used -- exactly the bugs a
+    running session avoids for itself, reappearing across a restart.
 
     Safe on a fresh directory: returns empty state if there is no log yet.
     """
-    captured, spot_committed = {}, {}
+    captured, spot_committed, capital_used = {}, {}, 0.0
     p = pathlib.Path(output_dir) / "paper_trades.jsonl"
     if not p.exists():
-        return captured, spot_committed
+        return captured, spot_committed, capital_used
     for line in p.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
@@ -239,11 +241,13 @@ def recover_session_state(output_dir):
         leg = spot_leg_direction(r["strategy"], direction)
         if leg is not None:
             spot_committed[r["asset"]] = leg
-    return captured, spot_committed
+        capital_used += r.get("capital_required") or 0.0
+    return captured, spot_committed, capital_used
 
 
 def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
-          available_capital=AVAILABLE_CAPITAL, capital=None, leverage=1.0):
+          available_capital=AVAILABLE_CAPITAL, capital=None, leverage=1.0,
+          annual_rate_pct=6.0):
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     ineff_log = open(out / "inefficiencies.jsonl", "a", encoding="utf-8")
@@ -252,11 +256,12 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
     # Real short-sale (or purchase) inventory does not refill mid-session, so
     # once an asset's spot leg is committed, no other strategy may reuse it
     # regardless of which opportunity_id it arrives under.
-    captured, spot_committed = recover_session_state(output_dir)
+    captured, spot_committed, capital_used = recover_session_state(output_dir)
     if captured:
-        print(f"Resumed session: {len(captured)} captures and "
-              f"{len(spot_committed)} spot-leg commitments recovered from "
-              f"{out}/paper_trades.jsonl")
+        print(f"Resumed session: {len(captured)} captures, "
+              f"{len(spot_committed)} spot-leg commitments and "
+              f"{capital_used:,.0f} INR capital already committed, "
+              f"recovered from {out}/paper_trades.jsonl")
 
     def log(h, p):
         h.write(json.dumps(p, sort_keys=True, default=str) + "\n"); h.flush()
@@ -271,6 +276,7 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
         "capital": capital if capital is not None else available_capital,
         "leverage": leverage,
         "buying_power": available_capital,
+        "carry_rate_pct": annual_rate_pct,
         "note": ("Leverage applied uniformly to every strategy. In reality "
                  "only futures-vs-futures legs (mcx_calendar) are genuinely "
                  "margined; cash_and_carry / conversion legs require buying "
@@ -287,7 +293,8 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
                 break
             try:
                 ts, rows = poll_once(connector, fno_universe, mcx_universe,
-                                    available_capital=available_capital)
+                                    available_capital=available_capital,
+                                    annual_rate_pct=annual_rate_pct)
             except Exception as e:
                 print(f"poll error: {e}")
                 time.sleep(poll_interval); continue
@@ -295,6 +302,25 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
                 log(ineff_log, r)
                 if not r["is_executable"] or r["opportunity_id"] in captured:
                     continue
+
+                # The ranking engine checks every candidate against the FULL
+                # pool independently, so without this a session can capture
+                # several trades that each fit 10L but together need 30L.
+                # Capital is consumed as trades are taken and, like the spot
+                # leg, is not released again: there is no exit lifecycle
+                # anywhere in this path, so treating it as committed for the
+                # rest of the session is the conservative reading.
+                need = r.get("capital_required") or 0.0
+                remaining = available_capital - capital_used
+                if need > remaining:
+                    log(trade_log, {"timestamp": r["timestamp"], "type": "blocked",
+                                    "asset": r["asset"], "strategy": r["strategy"],
+                                    "opportunity_id": r["opportunity_id"],
+                                    "capital_required": need,
+                                    "capital_remaining": remaining,
+                                    "rejection_reasons": ["insufficient_remaining_capital"]})
+                    continue
+
                 leg = spot_leg_direction(r["strategy"], r["direction"])
                 held = spot_committed.get(r["asset"])
                 if leg is not None and held is not None:
@@ -308,11 +334,13 @@ def watch(connector, fno_universe, mcx_universe, output_dir, poll_interval=5.0,
                                     })
                     continue
                 captured[r["opportunity_id"]] = r["net_profit"]
+                capital_used += need
                 if leg is not None:
                     spot_committed[r["asset"]] = leg
                 log(trade_log, {"timestamp": r["timestamp"], "type": "capture",
                                 "opportunity_id": r["opportunity_id"], "asset": r["asset"],
                                 "strategy": r["strategy"], "direction": r["direction"],
+                                "capital_required": need,
                                 "net_profit": r["net_profit"]})
             print(f"{ts[11:19]}  rows={len(rows)}  captures={len(captured)}  "
                   f"running_pnl={sum(captured.values()):+.2f}")
@@ -337,6 +365,14 @@ def main():
                    help="paper capital in INR the ranking engine may deploy "
                         "per opportunity. Caps position size and drives the "
                         "insufficient_capital rejection.")
+    p.add_argument("--carry-rate-pct", type=float, default=6.0,
+                   help="annual cost-of-carry used to price the fair value of "
+                        "a far-dated future. UNVERIFIED: 6.0 is an assumption, "
+                        "not a measured MCX/NSE financing rate. Every "
+                        "mcx_calendar and futures_basis 'edge' is the gap "
+                        "between the market and THIS number, so if it is wrong "
+                        "the edge is a modelling artefact, not a real "
+                        "mispricing. Sweep it to see how sensitive the P&L is.")
     p.add_argument("--leverage", type=float, default=1.0,
                    help="multiplier on --capital for buying power, i.e. F&O "
                         "margin. 10 means 1L of cash can carry 10L of "
@@ -364,10 +400,12 @@ def main():
               f"= {buying_power:,.0f} INR buying power")
         watch(connector, fno_universe, mcx_universe, args.output_dir,
               args.poll_interval, available_capital=buying_power,
-              capital=args.capital, leverage=args.leverage)
+              capital=args.capital, leverage=args.leverage,
+              annual_rate_pct=args.carry_rate_pct)
     else:
         ts, rows = poll_once(connector, fno_universe, mcx_universe,
-                             available_capital=buying_power)
+                             available_capital=buying_power,
+                             annual_rate_pct=args.carry_rate_pct)
         execu = [r for r in rows if r["is_executable"]]
         print(f"\n{len(rows)} checked, {len(execu)} executable:")
         for r in rows:
