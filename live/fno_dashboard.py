@@ -81,11 +81,19 @@ async function tick(){
  document.getElementById('strategies').innerHTML = Object.entries(s.by_strategy||{}).map(([k,v])=>
    '<div class="strategy-card"><div class="name">'+k+'</div><div class="net '+cls(v)+'">'+fmt(v)+'</div></div>').join('');
  document.getElementById('t').innerHTML =
-  '<tr><th>Time</th><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Action (Buy/Sell)</th>'+
-  '<th>Net edge %</th><th>Net profit INR</th><th>Executable</th></tr>' +
-  s.rows.map(r=>'<tr><td>'+r.timestamp.slice(11,19)+'</td><td>'+r.asset+'</td><td>'+r.strategy+
-   '</td><td>'+r.direction+'</td><td>'+(r.action||r.direction)+'</td><td>'+r.net_profit_pct.toFixed(4)+'</td><td>'+r.net_profit.toFixed(2)+
-   '</td><td class="'+(r.is_executable?'y':'n')+'">'+(r.is_executable?'YES':r.rejection_reasons.join(','))+'</td></tr>').join('');
+  '<tr><th>Time</th><th>Symbol</th><th>Strategy</th>'+
+  '<th>Net edge %</th><th>Net profit INR</th><th>Call</th></tr>' +
+  s.rows.map(r=>{
+    // The call IS the buy/sell instruction, not a yes/no verdict. If the
+    // gate skipped it, that goes here instead of a bare "NO" — the reason
+    // a call wasn't placed is more useful than a flag saying it wasn't.
+    const call = r.is_executable
+      ? '<b class="y">'+(r.action||r.direction)+'</b>'
+      : '<span class="n">NO CALL — '+r.rejection_reasons.join(', ')+'</span>';
+    return '<tr><td>'+r.timestamp.slice(11,19)+'</td><td>'+r.asset+'</td><td>'+r.strategy+
+     '</td><td>'+r.net_profit_pct.toFixed(4)+'</td><td>'+r.net_profit.toFixed(2)+
+     '</td><td>'+call+'</td></tr>';
+  }).join('');
 }
 tick(); setInterval(tick, 5000);
 </script></body></html>"""
